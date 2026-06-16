@@ -295,6 +295,7 @@ Deployer is a **separate** open-source product ([github.com/commerce-deployer/de
 ```env
 ENABLE_DEPLOYER=1
 DEPLOYER_IMAGE=docker.io/commerce-deployer/deployer:latest
+# Or GHCR only (no Docker Hub account): ghcr.io/commerce-deployer/deployer:latest
 ```
 
 Replace the image tag when pinning a release (e.g. `:v1.2.0`). For a **private** image, set `DEPLOYER_IMAGE_REGISTRY_HOST`, `DEPLOYER_IMAGE_REGISTRY_USER`, and `DEPLOYER_IMAGE_REGISTRY_PASSWORD` before install.

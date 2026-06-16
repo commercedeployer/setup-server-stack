@@ -59,7 +59,7 @@ Re-run after editing `.env`: `sudo bash ./setup-server-stack.sh`.
 
 Setup Server Stack is the **infrastructure layer**:
 
-- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source Docker deploy API; enable with `ENABLE_DEPLOYER=1` and `DEPLOYER_IMAGE` (`ghcr.io/commerce-deployer/deployer:latest` or `docker.io/commerce-deployer/deployer:latest` after release).
+- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source Docker deploy API; enable with `ENABLE_DEPLOYER=1` and `DEPLOYER_IMAGE` (`docker.io/commerce-deployer/deployer:latest` or `ghcr.io/commerce-deployer/deployer:latest` after release).
 - **D-Commerce** — commercial storefront and billing; calls Deployer over HTTP. Stack and Deployer work **without** D-Commerce.
 
 ---

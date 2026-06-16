@@ -354,6 +354,7 @@ Deployer — **отдельный** open-source продукт ([github.com/comm
 ```env
 ENABLE_DEPLOYER=1
 DEPLOYER_IMAGE=docker.io/commerce-deployer/deployer:latest
+# Или только GHCR (без Docker Hub): ghcr.io/commerce-deployer/deployer:latest
 ```
 
 Укажите нужный тег образа при фиксации релиза (например `:v1.2.0`). Для **приватного** образа задайте `DEPLOYER_IMAGE_REGISTRY_HOST`, `DEPLOYER_IMAGE_REGISTRY_USER`, `DEPLOYER_IMAGE_REGISTRY_PASSWORD` до установки.
