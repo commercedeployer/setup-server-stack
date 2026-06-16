@@ -1,0 +1,30 @@
+.env
+.env.local
+.env.*.local
+.env.stack
+.setup-server-stack-secrets
+*.secrets
+
+# Traefik / TLS
+traefik/acme.json
+
+# Generated JWT keys (registry ↔ docker_auth)
+certs/*.pem
+
+# Rendered configs (setup-server-stack.sh)
+config/docker_auth/auth_config.yml
+config/docker/config.json
+config/traefik/htpasswd
+config/traefik/htpasswd-doku
+config/pgadmin/
+
+# Local Compose overrides (optional)
+docker-compose.override.yml
+
+# Generated runtime data (STACK_ROOT=. on VPS)
+traefik/
+filebrowser/
+
+# IDE / agent (local only)
+.cursor/
+.cursorignore
