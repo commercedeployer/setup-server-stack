@@ -59,7 +59,7 @@ sudo bash ./setup-server-stack.sh
 
 Setup Server Stack — **нижний слой** (инфраструктура VPS):
 
-- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` и `DEPLOYER_IMAGE` (`docker.io/commerce-deployer/deployer:latest` или `ghcr.io/commerce-deployer/deployer:latest` после релиза).
+- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` и `DEPLOYER_IMAGE`. Образы: `docker.io/commercedeployer/deployer:latest` (Docker Hub) или `ghcr.io/commerce-deployer/deployer:latest` (GHCR).
 - **D-Commerce** — коммерческая витрина и биллинг; на проде вызывает Deployer по HTTP. Stack и Deployer работают **без** D-Commerce.
 
 ---

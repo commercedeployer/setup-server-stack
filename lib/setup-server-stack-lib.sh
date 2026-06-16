@@ -865,7 +865,7 @@ push_registry_seed_images() {
 prepare_deployer_image() {
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] || return 0
   local deployer_image="${DEPLOYER_IMAGE:-}"
-  [ -n "$deployer_image" ] || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image from Docker Hub or GHCR). Build via https://github.com/commerce-deployer/deployer CI, then set e.g. docker.io/commerce-deployer/deployer:latest"
+  [ -n "$deployer_image" ] || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image from Docker Hub or GHCR). Build via https://github.com/commerce-deployer/deployer CI, then set e.g. docker.io/commercedeployer/deployer:latest"
 
   step "Deployer: pull image $deployer_image"
   local retries="${REGISTRY_OPERATION_RETRIES:-3}"
@@ -1006,7 +1006,7 @@ validate_enable_flags() {
       || die "ENABLE_ADMINER=1 requires ENABLE_MONGO=1 and/or ENABLE_POSTGRES=1 and/or ENABLE_MARIADB=1 and/or ENABLE_MYSQL=1"
   fi
   [[ "${ENABLE_DEPLOYER:-0}" != "1" ]] || [ -n "${DEPLOYER_IMAGE:-}" ] \
-    || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image URL, e.g. docker.io/commerce-deployer/deployer:latest)."
+    || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image URL, e.g. docker.io/commercedeployer/deployer:latest)."
   if [[ -n "${REGISTRY_SEED_IMAGES:-}" ]] && [[ "${ENABLE_REGISTRY:-1}" != "1" ]]; then
     warn "REGISTRY_SEED_IMAGES set but ENABLE_REGISTRY=0 — seed image push skipped."
   fi
