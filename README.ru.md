@@ -34,6 +34,7 @@ git clone https://github.com/commerce-deployer/setup-server-stack.git setup-serv
 cd setup-server-stack
 cp .env.example .env
 # Заполните DOMAIN, ACME_EMAIL, SSH_PUBLIC_KEY; включите нужные ENABLE_*=1
+# Deployer: ENABLE_DEPLOYER=1 и DEPLOYER_IMAGE=docker.io/commercedeployer/deployer:latest
 chmod +x setup-server-stack.sh install.sh
 sudo bash ./setup-server-stack.sh
 ```
@@ -59,7 +60,7 @@ sudo bash ./setup-server-stack.sh
 
 Setup Server Stack — **нижний слой** (инфраструктура VPS):
 
-- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` и `DEPLOYER_IMAGE`. Образы: `docker.io/commercedeployer/deployer:latest` (Docker Hub) или `ghcr.io/commerce-deployer/deployer:latest` (GHCR).
+- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` и `DEPLOYER_IMAGE` (`docker.io/commercedeployer/deployer:latest` или `ghcr.io/commerce-deployer/deployer:latest`).
 - **D-Commerce** — коммерческая витрина и биллинг; на проде вызывает Deployer по HTTP. Stack и Deployer работают **без** D-Commerce.
 
 ---

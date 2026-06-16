@@ -34,6 +34,7 @@ git clone https://github.com/commerce-deployer/setup-server-stack.git setup-serv
 cd setup-server-stack
 cp .env.example .env
 # Set DOMAIN, ACME_EMAIL, SSH_PUBLIC_KEY; enable desired ENABLE_*=1
+# Deployer: ENABLE_DEPLOYER=1 and DEPLOYER_IMAGE=docker.io/commercedeployer/deployer:latest
 chmod +x setup-server-stack.sh install.sh
 sudo bash ./setup-server-stack.sh
 ```
@@ -59,7 +60,7 @@ Re-run after editing `.env`: `sudo bash ./setup-server-stack.sh`.
 
 Setup Server Stack is the **infrastructure layer**:
 
-- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source Docker deploy API; enable with `ENABLE_DEPLOYER=1` and `DEPLOYER_IMAGE`. Published images: `docker.io/commercedeployer/deployer:latest` (Docker Hub) or `ghcr.io/commerce-deployer/deployer:latest` (GHCR).
+- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source Docker deploy API; enable with `ENABLE_DEPLOYER=1` and `DEPLOYER_IMAGE` (`docker.io/commercedeployer/deployer:latest` or `ghcr.io/commerce-deployer/deployer:latest`).
 - **D-Commerce** — commercial storefront and billing; calls Deployer over HTTP. Stack and Deployer work **without** D-Commerce.
 
 ---
