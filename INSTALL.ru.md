@@ -87,6 +87,8 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
 
 **Важно:** перед запуском создайте локально **`cp .env.example .env`** и пропишите в `.env` хотя бы **`DOMAIN`** и **`ACME_EMAIL`** — иначе на сервер уедет шаблон с `example.com`. Скрипт `setup-server-stack.sh` при отсутствии `.env` на сервере завершится с ошибкой; удобнее один раз подготовить `.env` на ПК и дать скрипту залить его вместе с остальным.
 
+После успешной установки **`deploy-from-windows.ps1`** скачивает **`.setup-server-stack-secrets`** в ту же папку на ПК (рядом с `.env`), затем включает SSH hardening на сервере.
+
 Подключение под **`root`**. Пароль спрашивается **один раз** в начале (дальше копирование и установка идут по одной SSH-сессии); либо **`-SshIdentityFile`** / **`-RootPassword`**. Docker на VPS: уже установлен или **`INSTALL_DOCKER=1`** в `.env` (§2.1).
 
 ---
@@ -182,7 +184,8 @@ cat .setup-server-stack-secrets
 Там, например:
 
 - `TRAEFIK_DASHBOARD_PASSWORD` — вход в **dashboard Traefik**;
-- `REGISTRY_PASSWORD` — для `docker login` и для Watchtower;
+- `REGISTRY_PASSWORD` — admin push/pull (`REGISTRY_USER`, по умолчанию `registryadmin`);
+- `REGISTRY_PULL_PASSWORD` — read-only pull (`REGISTRY_PULL_USER`, по умолчанию `registrypull`);
 - `SEMAPHORE_ADMIN_PASSWORD`, `SEMAPHORE_ACCESS_KEY_ENCRYPTION` — для Semaphore;
 - при включённых БД — пароли Mongo/Postgres/MariaDB/MySQL и веб-морд.
 
@@ -227,7 +230,7 @@ docker compose -f docker-compose.yml --env-file .env.stack ps
 | Сервис | Адрес | Как зайти (логин / пароль) |
 |--------|-------|----------------------------|
 | Traefik dashboard | `https://traefik.company.ru` | Логин **`admin`**, пароль **`TRAEFIK_DASHBOARD_PASSWORD`** из `.setup-server-stack-secrets` |
-| Registry | `https://registry.company.ru` | Не веб-форма: **`docker login registry.company.ru`** (пользователь/пароль из `.env` / `.setup-server-stack-secrets`) |
+| Registry | `https://registry.company.ru` | **`docker login`**: push — **`REGISTRY_USER`** / **`REGISTRY_PASSWORD`**; pull-only — **`REGISTRY_PULL_USER`** / **`REGISTRY_PULL_PASSWORD`** (см. `.setup-server-stack-secrets`) |
 | Portainer | `https://portainer.company.ru` | **Первый заход** — мастер создаёт админа в браузере |
 | Semaphore | `https://semaphore.company.ru` | **`SEMAPHORE_ADMIN`** и пароль из `.env` / `.setup-server-stack-secrets` |
 | Doku | `https://doku.company.ru` | **Basic Auth в Traefik:** логин **`doku`**, пароль **`DOKU_DASHBOARD_PASSWORD`** в `.setup-server-stack-secrets`; файл `config/traefik/htpasswd-doku` создаёт `setup-server-stack.sh` |
@@ -311,7 +314,7 @@ docker login registry.company.ru
 docker push registry.company.ru/my-app:latest
 ```
 
-Логин и пароль — те же, что для **registry** (см. `REGISTRY_USER` / `REGISTRY_PASSWORD`).
+Логин и пароль для **push** — **`REGISTRY_USER`** / **`REGISTRY_PASSWORD`**. Для клиентов только с pull — **`REGISTRY_PULL_USER`** / **`REGISTRY_PULL_PASSWORD`** (Watchtower на сервере использует pull-аккаунт).
 
 ### Автозаливка списка образов при установке стека
 

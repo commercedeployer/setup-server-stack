@@ -77,6 +77,8 @@ Or: `.\deploy-from-windows.ps1 -RemoteHost 203.0.113.50`
 
 **Important:** create local **`cp .env.example .env`** with at least **`DOMAIN`** and **`ACME_EMAIL`** before running — otherwise the template goes to the server unchanged.
 
+On success, **`deploy-from-windows.ps1`** downloads **`.setup-server-stack-secrets`** into the same folder on your PC, then applies SSH hardening on the server.
+
 Connects as **`root`**. Password is asked **once** at the start (SSH multiplexing); or use **`-SshIdentityFile`** / **`-RootPassword`**.
 
 ---
@@ -151,7 +153,7 @@ sudo bash ./setup-server-stack.sh --force-secrets
 cat .setup-server-stack-secrets
 ```
 
-Includes `TRAEFIK_DASHBOARD_PASSWORD`, `REGISTRY_PASSWORD`, DB passwords, etc. **Do not commit** this file.
+Includes `TRAEFIK_DASHBOARD_PASSWORD`, `REGISTRY_PASSWORD`, `REGISTRY_PULL_PASSWORD`, DB passwords, etc. **Do not commit** this file. After **`deploy-from-windows.ps1`**, the same file is also saved locally next to `.env`.
 
 ---
 

@@ -1,9 +1,14 @@
+# Local config and generated passwords (installer + deploy-from-windows.ps1 download).
+# Secrets file name: .setup-server-stack-secrets (same path on VPS and on your PC).
 .env
 .env.local
 .env.*.local
 .env.stack
 .setup-server-stack-secrets
+**/.setup-server-stack-secrets
 *.secrets
+secrets-backup.txt
+*.secrets-backup
 
 # Traefik / TLS
 traefik/acme.json

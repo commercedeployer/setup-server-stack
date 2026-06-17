@@ -21,7 +21,11 @@ token:
 users:
   "${REGISTRY_USER}":
     password: "${REGISTRY_USER_PASSWORD_BCRYPT}"
+  "${REGISTRY_PULL_USER}":
+    password: "${REGISTRY_PULL_PASSWORD_BCRYPT}"
 
 acl:
   - match: { account: "${REGISTRY_USER}" }
     actions: ["*"]
+  - match: { account: "${REGISTRY_PULL_USER}" }
+    actions: ["pull"]

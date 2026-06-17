@@ -3,6 +3,8 @@
 # Do not run this file directly.
 #
 FORCE_SECRETS=0
+SKIP_SSH_HARDENING=0
+SSH_HARDENING_ONLY=0
 ENV_FILE=""
 
 RED='\033[0;31m'
@@ -70,14 +72,19 @@ normalize_registry_host() {
   printf '%s' "$h"
 }
 
-collect_registry_auth_entries() {
+collect_registry_watchtower_auth_entries() {
   local include_local="${1:-1}"
   local host user pass i
 
   if [[ "$include_local" == "1" ]] && registry_enabled; then
     host="registry.${DOMAIN}"
-    user="${REGISTRY_USER:-}"
-    pass="${REGISTRY_PASSWORD:-}"
+    if [ -n "${REGISTRY_PULL_USER:-}" ] && [ -n "${REGISTRY_PULL_PASSWORD:-}" ]; then
+      user="${REGISTRY_PULL_USER}"
+      pass="${REGISTRY_PULL_PASSWORD}"
+    else
+      user="${REGISTRY_USER:-}"
+      pass="${REGISTRY_PASSWORD:-}"
+    fi
     [ -n "$host" ] && [ -n "$user" ] && [ -n "$pass" ] && printf '%s|%s|%s\n' "$host" "$user" "$pass"
   fi
 
@@ -93,9 +100,40 @@ collect_registry_auth_entries() {
   done
 }
 
+collect_registry_credentials_entries() {
+  local include_local="${1:-1}"
+  local host user pass i
+
+  if [[ "$include_local" == "1" ]] && registry_enabled; then
+    host="registry.${DOMAIN}"
+    user="${REGISTRY_USER:-}"
+    pass="${REGISTRY_PASSWORD:-}"
+    [ -n "$host" ] && [ -n "$user" ] && [ -n "$pass" ] && printf '%s|%s|%s\n' "$host" "$user" "$pass"
+    if [ -n "${REGISTRY_PULL_USER:-}" ] && [ -n "${REGISTRY_PULL_PASSWORD:-}" ]; then
+      printf '%s|%s|%s\n' "$host" "${REGISTRY_PULL_USER}" "${REGISTRY_PULL_PASSWORD}"
+    fi
+  fi
+
+  local count="${EXTRA_REGISTRY_COUNT:-0}"
+  for ((i = 1; i <= count; i++)); do
+    local host_var="EXTRA_REGISTRY_${i}_HOST"
+    local user_var="EXTRA_REGISTRY_${i}_USER"
+    local pass_var="EXTRA_REGISTRY_${i}_PASSWORD"
+    host="$(normalize_registry_host "${!host_var:-}")"
+    user="${!user_var:-}"
+    pass="${!pass_var:-}"
+    [ -n "$host" ] && [ -n "$user" ] && [ -n "$pass" ] && printf '%s|%s|%s\n' "$host" "$user" "$pass"
+  done
+}
+
+# Back-compat alias for watchtower docker config (one auth per host → pull-only user when set).
+collect_registry_auth_entries() {
+  collect_registry_watchtower_auth_entries "$@"
+}
+
 build_registry_credentials_json() {
   if command -v python3 >/dev/null 2>&1; then
-    collect_registry_auth_entries 1 | python3 <<'PY'
+    collect_registry_credentials_entries 1 | python3 <<'PY'
 import json
 import sys
 
@@ -128,7 +166,7 @@ PY
       out+=","
     fi
     out+="{\"host\":\"${host}\",\"user\":\"${user}\",\"password\":\"${pass}\"}"
-  done < <(collect_registry_auth_entries 1)
+  done < <(collect_registry_credentials_entries 1)
   out+="]"
   printf '%s' "$out"
 }
@@ -137,11 +175,13 @@ parse_args() {
   for arg in "$@"; do
     case "$arg" in
       --force-secrets) FORCE_SECRETS=1 ;;
+      --skip-ssh-hardening) SKIP_SSH_HARDENING=1 ;;
+      --ssh-hardening-only) SSH_HARDENING_ONLY=1 ;;
       *)
         if [ -f "$arg" ]; then
           ENV_FILE="$arg"
         elif [[ "$arg" == -* ]]; then
-          die "Unknown argument: $arg (allowed: --force-secrets)"
+          die "Unknown argument: $arg (allowed: --force-secrets, --skip-ssh-hardening, --ssh-hardening-only)"
         fi
         ;;
     esac
@@ -348,25 +388,41 @@ write_stack_secrets() {
     fi
   fi
 
-  if [[ -z "${SEMAPHORE_ACCESS_KEY_ENCRYPTION:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
-    if ! grep -q '^SEMAPHORE_ACCESS_KEY_ENCRYPTION=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
-      local sk
-      sk=$(rand_hex 32)
-      grep -v '^SEMAPHORE_ACCESS_KEY_ENCRYPTION=' "$sec" >"${sec}.tmp" 2>/dev/null || true
-      mv "${sec}.tmp" "$sec" 2>/dev/null || true
-      echo "SEMAPHORE_ACCESS_KEY_ENCRYPTION=$sk" >>"$sec"
-      changed=1
+  if registry_enabled; then
+    : "${REGISTRY_PULL_USER:=registrypull}"
+    if [[ -z "${REGISTRY_PULL_PASSWORD:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+      if ! grep -q '^REGISTRY_PULL_PASSWORD=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+        local rpp
+        rpp=$(rand_hex 24)
+        grep -v '^REGISTRY_PULL_PASSWORD=' "$sec" >"${sec}.tmp" 2>/dev/null || true
+        mv "${sec}.tmp" "$sec" 2>/dev/null || true
+        echo "REGISTRY_PULL_PASSWORD=$rpp" >>"$sec"
+        changed=1
+      fi
     fi
   fi
 
-  if [[ -z "${SEMAPHORE_ADMIN_PASSWORD:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
-    if ! grep -q '^SEMAPHORE_ADMIN_PASSWORD=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
-      local sp
-      sp=$(rand_hex 16)
-      grep -v '^SEMAPHORE_ADMIN_PASSWORD=' "$sec" >"${sec}.tmp" 2>/dev/null || true
-      mv "${sec}.tmp" "$sec" 2>/dev/null || true
-      echo "SEMAPHORE_ADMIN_PASSWORD=$sp" >>"$sec"
-      changed=1
+  if [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]]; then
+    if [[ -z "${SEMAPHORE_ACCESS_KEY_ENCRYPTION:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+      if ! grep -q '^SEMAPHORE_ACCESS_KEY_ENCRYPTION=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+        local sk
+        sk=$(rand_hex 32)
+        grep -v '^SEMAPHORE_ACCESS_KEY_ENCRYPTION=' "$sec" >"${sec}.tmp" 2>/dev/null || true
+        mv "${sec}.tmp" "$sec" 2>/dev/null || true
+        echo "SEMAPHORE_ACCESS_KEY_ENCRYPTION=$sk" >>"$sec"
+        changed=1
+      fi
+    fi
+
+    if [[ -z "${SEMAPHORE_ADMIN_PASSWORD:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+      if ! grep -q '^SEMAPHORE_ADMIN_PASSWORD=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+        local sp
+        sp=$(rand_hex 16)
+        grep -v '^SEMAPHORE_ADMIN_PASSWORD=' "$sec" >"${sec}.tmp" 2>/dev/null || true
+        mv "${sec}.tmp" "$sec" 2>/dev/null || true
+        echo "SEMAPHORE_ADMIN_PASSWORD=$sp" >>"$sec"
+        changed=1
+      fi
     fi
   fi
 
@@ -584,6 +640,8 @@ write_env_for_compose() {
   : "${PORTAINER_IMAGE:=portainer/portainer-ce:latest}"
   : "${WATCHTOWER_IMAGE:=nickfedor/watchtower:latest}"
   : "${SEMAPHORE_IMAGE:=semaphoreui/semaphore:latest}"
+  : "${SEMAPHORE_ADMIN:=admin}"
+  : "${SEMAPHORE_ADMIN_EMAIL:=admin@${DOMAIN:-example.com}}"
   : "${DOKU_IMAGE:=amerkurev/doku:latest}"
   : "${DUPLICATI_IMAGE:=lscr.io/linuxserver/duplicati:latest}"
   : "${UPTIME_KUMA_IMAGE:=louislam/uptime-kuma:1}"
@@ -608,6 +666,13 @@ write_env_for_compose() {
   : "${DEPLOYER_REGISTRY_HOST:=}"
   : "${DEPLOYER_REGISTRY_USER:=}"
   : "${DEPLOYER_REGISTRY_PASSWORD:=}"
+  : "${REGISTRY_PULL_USER:=registrypull}"
+  if [[ -z "${DEPLOYER_REGISTRY_USER}" ]] && registry_enabled; then
+    DEPLOYER_REGISTRY_USER="${REGISTRY_USER}"
+  fi
+  if [[ -z "${DEPLOYER_REGISTRY_PASSWORD}" ]] && registry_enabled; then
+    DEPLOYER_REGISTRY_PASSWORD="${REGISTRY_PASSWORD}"
+  fi
   : "${DEPLOYER_REGISTRY_CREDENTIALS_JSON:=}"
   if [[ -z "${DEPLOYER_REGISTRY_CREDENTIALS_JSON}" ]]; then
     DEPLOYER_REGISTRY_CREDENTIALS_JSON="$(build_registry_credentials_json)"
@@ -618,8 +683,9 @@ write_env_for_compose() {
   export COMPOSE_PROFILES
 
   local env_out="$STACK_ROOT/.env.stack"
-  local rp sp sk mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr dap dss dapi drp drcj
+  local rp sp sk mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr dap dss dapi drp drcj rpp
   rp="$(quote_for_env_stack "${REGISTRY_PASSWORD:-}")"
+  rpp="$(quote_for_env_stack "${REGISTRY_PULL_PASSWORD:-}")"
   sp="$(quote_for_env_stack "${SEMAPHORE_ADMIN_PASSWORD:-}")"
   sk="$(quote_for_env_stack "${SEMAPHORE_ACCESS_KEY_ENCRYPTION:-}")"
   mp="$(quote_for_env_stack "${MONGO_ROOT_PASSWORD:-}")"
@@ -696,6 +762,8 @@ write_env_for_compose() {
     echo "REGISTRY_AUTH_TOKEN_ISSUER=${REGISTRY_AUTH_TOKEN_ISSUER}"
     echo "REGISTRY_USER=${REGISTRY_USER}"
     echo "REGISTRY_PASSWORD=\"$rp\""
+    echo "REGISTRY_PULL_USER=${REGISTRY_PULL_USER:-registrypull}"
+    echo "REGISTRY_PULL_PASSWORD=\"$rpp\""
     echo "WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}"
     echo "SEMAPHORE_ADMIN=${SEMAPHORE_ADMIN}"
     echo "SEMAPHORE_ADMIN_PASSWORD=\"$sp\""
@@ -750,14 +818,19 @@ render_auth_config() {
   need_cmd docker
   merge_secrets_for_compose
   ensure_envsubst
-  local line bcrypt
+  : "${REGISTRY_PULL_USER:=registrypull}"
+  local line bcrypt pull_bcrypt
   line=$(htpasswd_bcrypt "${REGISTRY_USER}" "${REGISTRY_PASSWORD}")
   bcrypt="${line#*:}"
+  line=$(htpasswd_bcrypt "${REGISTRY_PULL_USER}" "${REGISTRY_PULL_PASSWORD}")
+  pull_bcrypt="${line#*:}"
   export REGISTRY_AUTH_TOKEN_ISSUER
   export REGISTRY_USER
   export REGISTRY_USER_PASSWORD_BCRYPT="$bcrypt"
+  export REGISTRY_PULL_USER
+  export REGISTRY_PULL_PASSWORD_BCRYPT="$pull_bcrypt"
   # shellcheck disable=SC2016
-  envsubst '$REGISTRY_AUTH_TOKEN_ISSUER $REGISTRY_USER $REGISTRY_USER_PASSWORD_BCRYPT' \
+  envsubst '$REGISTRY_AUTH_TOKEN_ISSUER $REGISTRY_USER $REGISTRY_USER_PASSWORD_BCRYPT $REGISTRY_PULL_USER $REGISTRY_PULL_PASSWORD_BCRYPT' \
     <"$SCRIPT_DIR/config/docker_auth/auth_config.yml.example" \
     >"$STACK_ROOT/config/docker_auth/auth_config.yml"
 }
@@ -996,6 +1069,12 @@ validate_enable_flags() {
   done
   [[ "${ENABLE_DOCKER_AUTH:-0}" != "1" ]] || [[ "${ENABLE_REGISTRY:-0}" == "1" ]] || die "ENABLE_DOCKER_AUTH=1 requires ENABLE_REGISTRY=1"
   [[ "${ENABLE_REGISTRY:-0}" != "1" ]] || [[ "${ENABLE_DOCKER_AUTH:-0}" == "1" ]] || die "ENABLE_REGISTRY=1 requires ENABLE_DOCKER_AUTH=1 (registry token auth)."
+  if [[ "${ENABLE_REGISTRY:-0}" == "1" ]]; then
+    : "${REGISTRY_USER:=registryadmin}"
+    : "${REGISTRY_PULL_USER:=registrypull}"
+    [ -n "$REGISTRY_PULL_USER" ] || die "REGISTRY_PULL_USER is empty."
+    [[ "$REGISTRY_PULL_USER" != "$REGISTRY_USER" ]] || die "REGISTRY_PULL_USER must differ from REGISTRY_USER ($REGISTRY_USER)."
+  fi
   [[ "${ENABLE_MONGO_EXPRESS:-0}" != "1" ]] || [[ "${ENABLE_MONGO:-0}" == "1" ]] || die "ENABLE_MONGO_EXPRESS=1 requires ENABLE_MONGO=1"
   [[ "${ENABLE_PGADMIN:-0}" != "1" ]] || [[ "${ENABLE_POSTGRES:-0}" == "1" ]] || die "ENABLE_PGADMIN=1 requires ENABLE_POSTGRES=1"
   if [[ "${ENABLE_ADMINER:-0}" == "1" ]]; then
@@ -1219,13 +1298,22 @@ print_urls() {
   echo "Secrets: $SCRIPT_DIR/.setup-server-stack-secrets (do not commit)."
   echo "Traefik dashboard: user admin, password in TRAEFIK_DASHBOARD_PASSWORD in .setup-server-stack-secrets."
   echo "Doku: user doku, password in DOKU_DASHBOARD_PASSWORD in .setup-server-stack-secrets (Traefik Basic Auth)."
-  registry_enabled && echo "docker login: docker login registry.${d}"
+  registry_enabled && echo "docker login (push):  docker login registry.${d}  # user ${REGISTRY_USER}"
+  registry_enabled && echo "docker login (pull):  docker login registry.${d}  # user ${REGISTRY_PULL_USER:-registrypull}"
 }
 
 main() {
   parse_args "$@"
   export ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
   require_root
+
+  if [[ "${SSH_HARDENING_ONLY:-0}" == "1" ]]; then
+    [[ -f "$ENV_FILE" ]] || die "Missing $ENV_FILE"
+    load_env
+    apply_ssh_hardening
+    info "SSH hardening applied."
+    return 0
+  fi
 
   [[ -f "$SCRIPT_DIR/.env.example" ]] || die "Missing .env.example"
   [[ -f "$ENV_FILE" ]] || cp "$SCRIPT_DIR/.env.example" "$ENV_FILE"
@@ -1245,7 +1333,6 @@ main() {
   setup_unattended
   setup_fail2ban
   setup_ufw
-  apply_ssh_hardening
 
   ensure_dirs
   touch_acme
@@ -1275,4 +1362,9 @@ main() {
     -f "$SCRIPT_DIR/docker-compose.yml" up -d
 
   print_urls
+  if [[ "${SKIP_SSH_HARDENING:-0}" != "1" ]]; then
+    apply_ssh_hardening
+  else
+    warn "SSH hardening skipped (--skip-ssh-hardening). Finish with: sudo bash ./setup-server-stack.sh --ssh-hardening-only"
+  fi
 }

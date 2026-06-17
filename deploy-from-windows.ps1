@@ -7,6 +7,7 @@
 
   Host: DOMAIN in .env or -RemoteHost. Remote path: SETUP_SERVER_STACK_ROOT in .env or /opt/setup-server-stack.
   Options: -SkipInstall, -ForceSecrets, -SshIdentityFile path\to\key, -RootPassword (SecureString)
+  After install: downloads .setup-server-stack-secrets to LocalStackPath, then applies SSH hardening on the server.
 #>
 
 [CmdletBinding()]
@@ -30,6 +31,8 @@ $script:DeployControlPath = $null
 $script:DeployPasswordPlain = $null
 $script:SshExe = "ssh"
 $script:ScpExe = "scp"
+# Windows OpenSSH: ControlMaster/ControlPath → "getsockname failed: Not a socket"
+$script:DeployUseMultiplex = $false
 
 function Test-Cmd([string]$Name) { [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
 
@@ -93,6 +96,20 @@ if ([string]::IsNullOrWhiteSpace($RemoteHost)) {
     Write-Error "Set DOMAIN in .env (FQDN for SSH/TLS) or pass -RemoteHost with the server IP."
 }
 
+function Get-DeployConnectIPv4([string]$Name) {
+    if ($Name -match '^(?:\d{1,3}\.){3}\d{1,3}$') { return $Name }
+    try {
+        $ip = [System.Net.Dns]::GetHostAddresses($Name) |
+            Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } |
+            Select-Object -First 1
+        if ($ip) { return $ip.IPAddressToString }
+    } catch { }
+    return $Name
+}
+
+$RemoteHostName = $RemoteHost
+$DeployConnectHost = Get-DeployConnectIPv4 $RemoteHost
+
 $RemotePath = $RemotePath.TrimEnd("/")
 if ($RemotePath -notmatch "^/") { Write-Error "SETUP_SERVER_STACK_ROOT / RemotePath must be absolute, e.g. /opt/setup-server-stack" }
 $lastSlash = $RemotePath.LastIndexOf("/")
@@ -135,15 +152,16 @@ if ((Test-Path -LiteralPath $wSsh) -and (Test-Path -LiteralPath $wScp)) {
 $kg = (Get-Command ssh-keygen -ErrorAction SilentlyContinue).Source
 if ([string]::IsNullOrWhiteSpace($kg)) { $kg = "ssh-keygen" }
 $tOut = [System.IO.Path]::GetTempFileName(); $tErr = [System.IO.Path]::GetTempFileName()
-$khRemove = if ($SshPort -ne 22) { '[' + $RemoteHost + ']:' + [string]$SshPort } else { $RemoteHost }
+$khRemove = if ($SshPort -ne 22) { '[' + $DeployConnectHost + ']:' + [string]$SshPort } else { $DeployConnectHost }
 $null = Start-Process -FilePath $kg -ArgumentList @("-R", $khRemove) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tOut -RedirectStandardError $tErr
 Remove-Item -LiteralPath $tOut, $tErr -Force -ErrorAction SilentlyContinue
 
-$sshTarget = "root@${RemoteHost}"
+$sshTarget = "root@${DeployConnectHost}"
 $aa = [string][char]38 + [char]38
 $sedLf = 'for f in setup-server-stack.sh install.sh lib/setup-server-stack-lib.sh lib/docker-install.inc.sh; do sed -i ''s/\r$//'' "$f" 2>/dev/null; done'
 $installFlag = if ($ForceSecrets) { " --force-secrets" } else { "" }
-$remoteInstallCmd = (('cd ''{0}'' ' + $aa + ' ' + $sedLf + ' ' + $aa + ' chmod +x setup-server-stack.sh install.sh ' + $aa + ' bash ./setup-server-stack.sh{1}') -f $RemotePath, $installFlag)
+$remoteInstallCmd = (('cd ''{0}'' ' + $aa + ' ' + $sedLf + ' ' + $aa + ' chmod +x setup-server-stack.sh install.sh ' + $aa + ' bash ./setup-server-stack.sh --skip-ssh-hardening{1}') -f $RemotePath, $installFlag)
+$remoteHardenCmd = (('cd ''{0}'' ' + $aa + ' bash ./setup-server-stack.sh --ssh-hardening-only') -f $RemotePath)
 $remotePrepare = (('rm -rf ''{0}'' ' + $aa + ' mkdir -p ''{1}''') -f $RemotePath, $remoteParent)
 
 function ConvertTo-PlainText([Security.SecureString]$Secure) {
@@ -193,7 +211,7 @@ function Get-DeployControlPath {
 }
 
 function Get-SshMultiplexOpts {
-    if ($useIdentity) { return @() }
+    if ($useIdentity -or -not $script:DeployUseMultiplex) { return @() }
     return @(
         "-o", "ControlMaster=no",
         "-o", "ControlPath=$(Get-DeployControlPath)",
@@ -207,7 +225,7 @@ function Initialize-DeployPasswordAuth {
         $script:DeployPasswordPlain = ConvertTo-PlainText $RootPassword
     } else {
         Write-Host ""
-        $sec = Read-Host "root@${RemoteHost} password (entered once for this run)" -AsSecureString
+        $sec = Read-Host "root@${DeployConnectHost} password (entered once for this run)" -AsSecureString
         if (-not $sec -or $sec.Length -eq 0) { Write-Error "Empty password." }
         $script:DeployPasswordPlain = ConvertTo-PlainText $sec
     }
@@ -271,7 +289,7 @@ function Invoke-DeployScp {
 }
 
 function Start-DeploySshMaster {
-    if ($useIdentity) { return }
+    if ($useIdentity -or -not $script:DeployUseMultiplex) { return }
     $ctrl = Get-DeployControlPath
     Write-Host "Opening SSH session (password used once)..." -ForegroundColor DarkGray
     $masterArgs = @(
@@ -305,7 +323,7 @@ function Start-DeploySshMaster {
 }
 
 function Stop-DeploySshMaster {
-    if ($useIdentity -or -not $script:DeployControlPath) { return }
+    if ($useIdentity -or -not $script:DeployUseMultiplex -or -not $script:DeployControlPath) { return }
     $exitArgs = @(
         "-4",
         "-o", "ControlPath=$(Get-DeployControlPath)",
@@ -336,8 +354,9 @@ if ($useIdentity) {
     $script:DeploySshConfigTemp = Join-Path $env:TEMP ("setup-server-stack-ssh-{0}.conf" -f $PID)
     $cfgLines = @(
         "Host *",
+        "    AddressFamily inet",
         "    StrictHostKeyChecking accept-new",
-        "    ConnectTimeout 25",
+        "    ConnectTimeout 30",
         "    PubkeyAuthentication no",
         "    PreferredAuthentications password,keyboard-interactive",
         "    KbdInteractiveAuthentication yes",
@@ -362,10 +381,19 @@ if ($useIdentity) {
 
 Write-Host ""
 Write-Host "=== Setup Server Stack: copy and setup-server-stack.sh ===" -ForegroundColor Cyan
+if ($RemoteHostName -ne $DeployConnectHost) {
+    Write-Host "  SSH via IPv4 $DeployConnectHost (resolved from $RemoteHostName)" -ForegroundColor White
+} else {
+    Write-Host "  SSH via $DeployConnectHost" -ForegroundColor White
+}
 Write-Host "  $sshTarget port $SshPort -> $RemotePath" -ForegroundColor White
+$preflight = Test-NetConnection -ComputerName $DeployConnectHost -Port $SshPort -WarningAction SilentlyContinue
+if (-not $preflight.TcpTestSucceeded) {
+    Write-Error "TCP port $SshPort is not reachable on $DeployConnectHost. Open SSH in the VPS firewall and verify the server is running."
+}
 if ($enableDeployer) { Write-Host "  Deployer: enabled (image: $deployerImageFromEnv)" -ForegroundColor White }
 if ($useIdentity) { Write-Host "  SSH key: $SshIdentityFile" -ForegroundColor Yellow }
-else { Write-Host "  Password: once at start, then copy + install without re-prompting." -ForegroundColor Yellow }
+else { Write-Host "  Password: entered once (SSH_ASKPASS for each step on Windows)." -ForegroundColor Yellow }
 Write-Host ""
 
 try {
@@ -374,7 +402,7 @@ try {
         Start-DeploySshMaster
     }
 
-    Write-Host "1/3 Preparing remote directory..." -ForegroundColor Green
+    Write-Host "1/5 Preparing remote directory..." -ForegroundColor Green
     Invoke-DeploySsh -BaseArgs $sa -ExtraArgs @($sshTarget, $remotePrepare)
     if ($LASTEXITCODE -ne 0) {
         Write-Host "SSH failed. Check password/key and DNS for DOMAIN." -ForegroundColor Yellow
@@ -382,7 +410,7 @@ try {
     }
 
     $scpTarget = if ($remoteParent -eq "/") { "${sshTarget}:/" } else { "${sshTarget}:$remoteParent/" }
-    Write-Host "2/3 Copying files..." -ForegroundColor Green
+    Write-Host "2/5 Copying files..." -ForegroundColor Green
     Invoke-DeployScp -BaseArgs $ca -ExtraArgs @("-r", "$CopySourcePath", $scpTarget)
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -395,11 +423,27 @@ try {
         exit 0
     }
 
-    Write-Host "3/3 setup-server-stack.sh ..." -ForegroundColor Green
+    Write-Host "3/5 setup-server-stack.sh (install, SSH hardening deferred)..." -ForegroundColor Green
     Invoke-DeploySsh -BaseArgs $sa -ExtraArgs @($sshTarget, $remoteInstallCmd) -RequestTty
     $exitInstall = $LASTEXITCODE
     if ($exitInstall -ne 0) { exit $exitInstall }
-    Write-Host "Done." -ForegroundColor Green
+
+    $localSecrets = Join-Path $LocalStackPath ".setup-server-stack-secrets"
+    $remoteSecrets = "${sshTarget}:${RemotePath}/.setup-server-stack-secrets"
+    Write-Host "4/5 Downloading .setup-server-stack-secrets to $localSecrets ..." -ForegroundColor Green
+    Invoke-DeployScp -BaseArgs $ca -ExtraArgs @($remoteSecrets, $localSecrets)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to download .setup-server-stack-secrets from the server."
+    }
+    if (-not (Test-Path -LiteralPath $localSecrets)) {
+        Write-Error "Secrets file missing after download: $localSecrets"
+    }
+    Write-Host "Secrets saved locally (do not commit)." -ForegroundColor DarkGray
+
+    Write-Host "5/5 SSH hardening on server..." -ForegroundColor Green
+    Invoke-DeploySsh -BaseArgs $sa -ExtraArgs @($sshTarget, $remoteHardenCmd)
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "Done. Passwords: $localSecrets" -ForegroundColor Green
 } finally {
     Remove-DeployArtifacts
 }
