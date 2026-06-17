@@ -29,4 +29,4 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Internal-only docs from public tree (TZ, ARCHITECTURE, ADMIN*, ECOSYSTEM*, STACK-IMPROVEMENTS, `docs/`).
 - Deployer source-folder install (`DEPLOYER_INSTALL_MODE`, build from `../deployer`).
 
-[1.0.0]: https://github.com/commerce-deployer/setup-server-stack/releases/tag/v1.0.0
+[1.0.0]: https://github.com/commercedeployer/setup-server-stack/releases/tag/v1.0.0

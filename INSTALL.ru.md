@@ -349,21 +349,21 @@ EXTRA_REGISTRY_2_PASSWORD=token2
 
 ### Deployer
 
-Deployer — **отдельный** open-source продукт ([github.com/commerce-deployer/deployer](https://github.com/commerce-deployer/deployer)). Образ собирается CI и публикуется в **Docker Hub** и **GHCR** — стек только **скачивает** его, как Traefik или Portainer.
+Deployer — **отдельный** open-source продукт ([github.com/commercedeployer/deployer](https://github.com/commercedeployer/deployer)). Образ собирается CI и публикуется в **Docker Hub** и **GHCR** — стек только **скачивает** его, как Traefik или Portainer.
 
 **Опубликованные образы (public):**
 
 | Registry | `DEPLOYER_IMAGE` | Проверка до установки |
 |----------|------------------|------------------------|
 | Docker Hub (рекомендуется) | `docker.io/commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
-| GHCR | `ghcr.io/commerce-deployer/deployer:latest` | `docker pull ghcr.io/commerce-deployer/deployer:latest` |
+| GHCR | `ghcr.io/commercedeployer/deployer:latest` | `docker pull ghcr.io/commercedeployer/deployer:latest` |
 
 ```env
 ENABLE_DEPLOYER=1
 DEPLOYER_IMAGE=docker.io/commercedeployer/deployer:latest
 ```
 
-Страница на Hub: [hub.docker.com/r/commercedeployer/deployer](https://hub.docker.com/r/commercedeployer/deployer). Логин Hub без дефиса (`commercedeployer`); GHCR — org GitHub `commerce-deployer`.
+Страница на Hub: [hub.docker.com/r/commercedeployer/deployer](https://hub.docker.com/r/commercedeployer/deployer). На GHCR тот же org: `ghcr.io/commercedeployer/deployer`.
 
 В проде вместо `:latest` укажите тег релиза (например `:v1.2.0`). Для **приватного** образа задайте `DEPLOYER_IMAGE_REGISTRY_HOST`, `DEPLOYER_IMAGE_REGISTRY_USER`, `DEPLOYER_IMAGE_REGISTRY_PASSWORD` до установки.
 

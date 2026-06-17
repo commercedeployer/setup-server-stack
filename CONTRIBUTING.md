@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in **[Setup Server Stack](https://github.com/commerce-deployer/setup-server-stack)**.
+Thank you for your interest in **[Setup Server Stack](https://github.com/commercedeployer/setup-server-stack)**.
 
 **Русский:** [CONTRIBUTING.ru.md](CONTRIBUTING.ru.md)
 

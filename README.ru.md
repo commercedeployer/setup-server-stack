@@ -1,6 +1,6 @@
 # Setup Server Stack
 
-[![CI](https://github.com/commerce-deployer/setup-server-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/commerce-deployer/setup-server-stack/actions/workflows/ci.yml)
+[![CI](https://github.com/commercedeployer/setup-server-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/commercedeployer/setup-server-stack/actions/workflows/ci.yml)
 
 **Setup Server Stack** — open-source установщик VPS-инфраструктуры: один скрипт, один `.env`, готовые HTTPS-сервисы и опциональные базы данных. Состав сервисов включается флагами `ENABLE_*` — без отдельных «стеков» и ручной склейки compose.
 
@@ -30,7 +30,7 @@
 **Требования:** Linux VPS (Ubuntu/Debian), root/sudo, домен с DNS на сервер, Docker Compose v2 (или `INSTALL_DOCKER=1`).
 
 ```bash
-git clone https://github.com/commerce-deployer/setup-server-stack.git setup-server-stack
+git clone https://github.com/commercedeployer/setup-server-stack.git setup-server-stack
 cd setup-server-stack
 cp .env.example .env
 # Заполните DOMAIN, ACME_EMAIL, SSH_PUBLIC_KEY; включите нужные ENABLE_*=1
@@ -60,7 +60,7 @@ sudo bash ./setup-server-stack.sh
 
 Setup Server Stack — **нижний слой** (инфраструктура VPS):
 
-- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` и `DEPLOYER_IMAGE` (`docker.io/commercedeployer/deployer:latest` или `ghcr.io/commerce-deployer/deployer:latest`).
+- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` и `DEPLOYER_IMAGE` (`docker.io/commercedeployer/deployer:latest` или `ghcr.io/commercedeployer/deployer:latest`).
 - **D-Commerce** — коммерческая витрина и биллинг; на проде вызывает Deployer по HTTP. Stack и Deployer работают **без** D-Commerce.
 
 ---

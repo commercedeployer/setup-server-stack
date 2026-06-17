@@ -290,21 +290,21 @@ Logins run at install; credentials go to `config/docker/config.json` (Watchtower
 
 ### Deployer
 
-Deployer is a **separate** open-source product ([github.com/commerce-deployer/deployer](https://github.com/commerce-deployer/deployer)). Its image is built by CI and published to **Docker Hub** and **GHCR** — the stack only **pulls** it, like Traefik or Portainer.
+Deployer is a **separate** open-source product ([github.com/commercedeployer/deployer](https://github.com/commercedeployer/deployer)). Its image is built by CI and published to **Docker Hub** and **GHCR** — the stack only **pulls** it, like Traefik or Portainer.
 
 **Published images (public):**
 
 | Registry | `DEPLOYER_IMAGE` | Verify before install |
 |----------|------------------|------------------------|
 | Docker Hub (recommended) | `docker.io/commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
-| GHCR | `ghcr.io/commerce-deployer/deployer:latest` | `docker pull ghcr.io/commerce-deployer/deployer:latest` |
+| GHCR | `ghcr.io/commercedeployer/deployer:latest` | `docker pull ghcr.io/commercedeployer/deployer:latest` |
 
 ```env
 ENABLE_DEPLOYER=1
 DEPLOYER_IMAGE=docker.io/commercedeployer/deployer:latest
 ```
 
-Docker Hub page: [hub.docker.com/r/commercedeployer/deployer](https://hub.docker.com/r/commercedeployer/deployer). Hub username has no hyphen (`commercedeployer`); GHCR uses the GitHub org name `commerce-deployer`.
+Docker Hub: [hub.docker.com/r/commercedeployer/deployer](https://hub.docker.com/r/commercedeployer/deployer). GHCR uses the same org: `ghcr.io/commercedeployer/deployer`.
 
 Replace `:latest` with a release tag (e.g. `:v1.2.0`) in production. For a **private** image, set `DEPLOYER_IMAGE_REGISTRY_HOST`, `DEPLOYER_IMAGE_REGISTRY_USER`, and `DEPLOYER_IMAGE_REGISTRY_PASSWORD` before install.
 

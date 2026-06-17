@@ -1,6 +1,6 @@
 # Участие в разработке
 
-Спасибо за интерес к **[Setup Server Stack](https://github.com/commerce-deployer/setup-server-stack)**.
+Спасибо за интерес к **[Setup Server Stack](https://github.com/commercedeployer/setup-server-stack)**.
 
 **English:** [CONTRIBUTING.md](CONTRIBUTING.md)
 

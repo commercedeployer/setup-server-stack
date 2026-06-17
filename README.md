@@ -1,6 +1,6 @@
 # Setup Server Stack
 
-[![CI](https://github.com/commerce-deployer/setup-server-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/commerce-deployer/setup-server-stack/actions/workflows/ci.yml)
+[![CI](https://github.com/commercedeployer/setup-server-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/commercedeployer/setup-server-stack/actions/workflows/ci.yml)
 
 **Setup Server Stack** is an open-source VPS infrastructure installer: one script, one `.env`, HTTPS services out of the box, and optional databases. Enable services with `ENABLE_*` flags — no separate stacks or manual compose wiring.
 
@@ -30,7 +30,7 @@ Database ports are **not** exposed to the public internet; access is via the Doc
 **Requirements:** Linux VPS (Ubuntu/Debian), root/sudo, domain with DNS pointing to the server, Docker Compose v2 (or `INSTALL_DOCKER=1`).
 
 ```bash
-git clone https://github.com/commerce-deployer/setup-server-stack.git setup-server-stack
+git clone https://github.com/commercedeployer/setup-server-stack.git setup-server-stack
 cd setup-server-stack
 cp .env.example .env
 # Set DOMAIN, ACME_EMAIL, SSH_PUBLIC_KEY; enable desired ENABLE_*=1
@@ -60,7 +60,7 @@ Re-run after editing `.env`: `sudo bash ./setup-server-stack.sh`.
 
 Setup Server Stack is the **infrastructure layer**:
 
-- **[Deployer](https://github.com/commerce-deployer/deployer)** — open-source Docker deploy API; enable with `ENABLE_DEPLOYER=1` and `DEPLOYER_IMAGE` (`docker.io/commercedeployer/deployer:latest` or `ghcr.io/commerce-deployer/deployer:latest`).
+- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source Docker deploy API; enable with `ENABLE_DEPLOYER=1` and `DEPLOYER_IMAGE` (`docker.io/commercedeployer/deployer:latest` or `ghcr.io/commercedeployer/deployer:latest`).
 - **D-Commerce** — commercial storefront and billing; calls Deployer over HTTP. Stack and Deployer work **without** D-Commerce.
 
 ---

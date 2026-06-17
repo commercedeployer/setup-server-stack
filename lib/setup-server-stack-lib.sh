@@ -865,7 +865,7 @@ push_registry_seed_images() {
 prepare_deployer_image() {
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] || return 0
   local deployer_image="${DEPLOYER_IMAGE:-}"
-  [ -n "$deployer_image" ] || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image from Docker Hub or GHCR). Build via https://github.com/commerce-deployer/deployer CI, then set e.g. docker.io/commercedeployer/deployer:latest"
+  [ -n "$deployer_image" ] || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image from Docker Hub or GHCR). Build via https://github.com/commercedeployer/deployer CI, then set e.g. docker.io/commercedeployer/deployer:latest"
 
   step "Deployer: pull image $deployer_image"
   local retries="${REGISTRY_OPERATION_RETRIES:-3}"
