@@ -146,7 +146,8 @@ services:
     container_name: semaphore
     restart: unless-stopped
     environment:
-      SEMAPHORE_DB_DIALECT: bolt
+      SEMAPHORE_DB_DIALECT: sqlite
+      SEMAPHORE_DB: /var/lib/semaphore/semaphore.sqlite
       SEMAPHORE_ACCESS_KEY_ENCRYPTION: ${SEMAPHORE_ACCESS_KEY_ENCRYPTION}
       SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN}
       SEMAPHORE_ADMIN_PASSWORD: ${SEMAPHORE_ADMIN_PASSWORD}
@@ -190,13 +191,14 @@ services:
   #   - /var/lib/docker/volumes:/source/docker-volumes:ro
   duplicati:
     profiles: [duplicati]
-    image: ${DUPLICATI_IMAGE:-lscr.io/linuxserver/duplicati:latest}
+    image: ${DUPLICATI_IMAGE:-linuxserver/duplicati:latest}
     container_name: duplicati
     restart: unless-stopped
     environment:
       PUID: ${DUP_PUID:-1000}
       PGID: ${DUP_PGID:-1000}
       TZ: ${TZ:-UTC}
+      SETTINGS_ENCRYPTION_KEY: ${DUPLICATI_SETTINGS_ENCRYPTION_KEY}
     volumes:
       - duplicati_config:/config
     labels:

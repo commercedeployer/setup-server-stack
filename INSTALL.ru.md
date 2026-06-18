@@ -329,7 +329,7 @@ REGISTRY_SEED_IMAGES=myapp:latest,registry.remote.tld/acme/api:1.4;redis:7
 - Пустой `REGISTRY_SEED_IMAGES` — шаг пропускается.
 - Если образ не найден локально, скрипт покажет предупреждение и продолжит.
 - Для образов с внешним registry (`registry.remote.tld/...`) хост срезается, и тег в локальном registry будет вида `registry.${DOMAIN}/acme/api:1.4`.
-- Сетевые операции registry (`docker login/pull/push` и подъем registry-сервисов) выполняются с ретраями; число попыток задаётся `REGISTRY_OPERATION_RETRIES` (по умолчанию `3`).
+- Сетевые операции установки (`apt`, `curl`, `docker login/pull/push`, pre-pull образов и `docker compose up`) выполняются с ретраями; число попыток задаётся `REGISTRY_OPERATION_RETRIES` (по умолчанию `3`).
 - Между попытками используется экспоненциальный backoff (`REGISTRY_RETRY_BACKOFF_BASE_SEC`, `REGISTRY_RETRY_BACKOFF_MAX_SEC`), по умолчанию: `2s`, `4s`, `8s` (не выше `10s`).
 
 ### Дополнительные внешние registry при установке

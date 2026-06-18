@@ -28,6 +28,39 @@ docker_service_diagnostics() {
   RUN journalctl -u docker.service -n 60 --no-pager 2>&1 | head -100 >&2 || true
 }
 
+dns_resolves() {
+  local host="${1:-download.docker.com}"
+  getent ahostsv4 "$host" >/dev/null 2>&1 || getent hosts "$host" >/dev/null 2>&1
+}
+
+ensure_dns_ready() {
+  dns_resolves download.docker.com && dns_resolves security.ubuntu.com && return 0
+
+  warn "DNS lookup failed on the VPS; configuring public fallback DNS for systemd-resolved."
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files systemd-resolved.service >/dev/null 2>&1; then
+    RUN mkdir -p /etc/systemd/resolved.conf.d
+    cat <<'EOF' | RUN tee /etc/systemd/resolved.conf.d/99-setup-server-stack-dns.conf >/dev/null
+[Resolve]
+DNS=1.1.1.1 8.8.8.8
+FallbackDNS=1.0.0.1 8.8.4.4
+EOF
+    RUN systemctl restart systemd-resolved 2>/dev/null || true
+    sleep 2
+  fi
+
+  if ! dns_resolves download.docker.com; then
+    warn "systemd-resolved did not recover DNS; writing /etc/resolv.conf fallback."
+    RUN cp -a /etc/resolv.conf "/etc/resolv.conf.setup-server-stack.bak.$(date +%s)" 2>/dev/null || true
+    {
+      echo "nameserver 1.1.1.1"
+      echo "nameserver 8.8.8.8"
+    } | RUN tee /etc/resolv.conf >/dev/null
+    sleep 1
+  fi
+
+  dns_resolves download.docker.com || err "DNS still broken on VPS: cannot resolve download.docker.com"
+}
+
 docker_merge_daemon_json_iptables_off() {
   step "Workaround: /etc/docker/daemon.json — iptables: false"
   RUN mkdir -p /etc/docker
@@ -90,8 +123,10 @@ ensure_openssl() {
   if command -v apt-get &>/dev/null; then
     step "Installing openssl (apt)"
     export DEBIAN_FRONTEND=noninteractive
-    RUN apt-get update -qq
-    RUN apt-get install -y -qq openssl ca-certificates
+    local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+    ensure_dns_ready
+    retry_run "$retries" apt-get update -o APT::Update::Error-Mode=any -qq
+    retry_run "$retries" apt-get install -y -qq openssl ca-certificates
   fi
   command -v openssl &>/dev/null || err "openssl required (apt install openssl)."
 }
@@ -117,18 +152,20 @@ install_docker_engine() {
 
   step "Installing Docker Engine and Compose plugin"
   export DEBIAN_FRONTEND=noninteractive
-  RUN apt-get update -qq
+  local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+  ensure_dns_ready
+  retry_run "$retries" apt-get update -o APT::Update::Error-Mode=any -qq
   RUN apt-get remove -y docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc 2>/dev/null || true
-  RUN apt-get install -y -qq ca-certificates curl gnupg
+  retry_run "$retries" apt-get install -y -qq ca-certificates curl gnupg
   RUN install -m 0755 -d /etc/apt/keyrings
-  RUN curl -fsSL "https://download.docker.com/linux/${id}/gpg" -o /etc/apt/keyrings/docker.asc
+  retry_run "$retries" curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused "https://download.docker.com/linux/${id}/gpg" -o /etc/apt/keyrings/docker.asc
   RUN chmod a+r /etc/apt/keyrings/docker.asc
   local arch
   arch="$(dpkg --print-architecture)"
   echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${id} ${version_codename} stable" |
     RUN tee /etc/apt/sources.list.d/docker.list >/dev/null
-  RUN apt-get update -qq
-  RUN apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  retry_run "$retries" apt-get update -o APT::Update::Error-Mode=any -qq
+  retry_run "$retries" apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   if start_docker_service; then
     info "Installed docker-ce and docker compose plugin."
   else

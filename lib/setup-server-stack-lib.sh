@@ -45,6 +45,12 @@ retry_cmd() {
   return 1
 }
 
+retry_run() {
+  local attempts="$1"
+  shift
+  retry_cmd "$attempts" RUN "$@"
+}
+
 docker_login_with_retry() {
   local host="$1" user="$2" pass="$3" attempts="$4"
   local base_delay="${REGISTRY_RETRY_BACKOFF_BASE_SEC:-2}"
@@ -291,12 +297,29 @@ ensure_network() {
 
 rand_hex() { openssl rand -hex "${1:-32}"; }
 
+rand_base64() { openssl rand -base64 "${1:-32}" | tr -d '\n'; }
+
+semaphore_access_key_encryption_valid() {
+  local key="${1:-}"
+  local decoded_bytes
+
+  [[ -n "$key" ]] || return 1
+  decoded_bytes=$(printf '%s' "$key" | openssl base64 -d -A 2>/dev/null | wc -c | tr -d '[:space:]') || return 1
+
+  case "$decoded_bytes" in
+    16|24|32) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 ensure_htpasswd() {
   command -v htpasswd &>/dev/null && return 0
   if command -v apt-get &>/dev/null; then
     step "Installing apache2-utils (htpasswd)"
-    RUN apt-get update -qq
-    RUN env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq apache2-utils
+    local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+    ensure_dns_ready
+    retry_run "$retries" apt-get update -o APT::Update::Error-Mode=any -qq
+    retry_run "$retries" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq apache2-utils
   fi
   command -v htpasswd &>/dev/null || err "htpasswd required (apt install apache2-utils)."
 }
@@ -305,8 +328,10 @@ ensure_envsubst() {
   command -v envsubst &>/dev/null && return 0
   if command -v apt-get &>/dev/null; then
     step "Installing gettext-base (envsubst for registry auth config)"
-    RUN apt-get update -qq
-    RUN env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gettext-base
+    local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+    ensure_dns_ready
+    retry_run "$retries" apt-get update -o APT::Update::Error-Mode=any -qq
+    retry_run "$retries" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gettext-base
   fi
   command -v envsubst &>/dev/null || err "envsubst required (apt install gettext-base)."
 }
@@ -403,10 +428,24 @@ write_stack_secrets() {
   fi
 
   if [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]]; then
-    if [[ -z "${SEMAPHORE_ACCESS_KEY_ENCRYPTION:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
-      if ! grep -q '^SEMAPHORE_ACCESS_KEY_ENCRYPTION=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+    local force_semaphore_key=0
+
+    if [[ -n "${SEMAPHORE_ACCESS_KEY_ENCRYPTION:-}" ]] \
+      && ! semaphore_access_key_encryption_valid "$SEMAPHORE_ACCESS_KEY_ENCRYPTION"; then
+      if grep -Eq '^SEMAPHORE_ACCESS_KEY_ENCRYPTION=.+$' "$ENV_FILE" 2>/dev/null; then
+        err "SEMAPHORE_ACCESS_KEY_ENCRYPTION must be base64 and decode to 16, 24, or 32 bytes. Leave it empty to generate a valid key."
+      fi
+      force_semaphore_key=1
+    fi
+
+    if [[ -z "${SEMAPHORE_ACCESS_KEY_ENCRYPTION:-}" ]] \
+      || [[ "$FORCE_SECRETS" -eq 1 ]] \
+      || [[ "$force_semaphore_key" -eq 1 ]]; then
+      if ! grep -q '^SEMAPHORE_ACCESS_KEY_ENCRYPTION=' "$sec" 2>/dev/null \
+        || [[ "$FORCE_SECRETS" -eq 1 ]] \
+        || [[ "$force_semaphore_key" -eq 1 ]]; then
         local sk
-        sk=$(rand_hex 32)
+        sk=$(rand_base64 32)
         grep -v '^SEMAPHORE_ACCESS_KEY_ENCRYPTION=' "$sec" >"${sec}.tmp" 2>/dev/null || true
         mv "${sec}.tmp" "$sec" 2>/dev/null || true
         echo "SEMAPHORE_ACCESS_KEY_ENCRYPTION=$sk" >>"$sec"
@@ -421,6 +460,19 @@ write_stack_secrets() {
         grep -v '^SEMAPHORE_ADMIN_PASSWORD=' "$sec" >"${sec}.tmp" 2>/dev/null || true
         mv "${sec}.tmp" "$sec" 2>/dev/null || true
         echo "SEMAPHORE_ADMIN_PASSWORD=$sp" >>"$sec"
+        changed=1
+      fi
+    fi
+  fi
+
+  if [[ "${ENABLE_DUPLICATI:-1}" == "1" ]]; then
+    if [[ -z "${DUPLICATI_SETTINGS_ENCRYPTION_KEY:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+      if ! grep -q '^DUPLICATI_SETTINGS_ENCRYPTION_KEY=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+        local dsek
+        dsek=$(rand_hex 32)
+        grep -v '^DUPLICATI_SETTINGS_ENCRYPTION_KEY=' "$sec" >"${sec}.tmp" 2>/dev/null || true
+        mv "${sec}.tmp" "$sec" 2>/dev/null || true
+        echo "DUPLICATI_SETTINGS_ENCRYPTION_KEY=$dsek" >>"$sec"
         changed=1
       fi
     fi
@@ -547,7 +599,10 @@ write_stack_secrets() {
     fi
   fi
 
-  [[ "$changed" -eq 1 ]] && echo "Updated $sec (mode 600). See passwords inside the file."
+  if [[ "$changed" -eq 1 ]]; then
+    echo "Updated $sec (mode 600). See passwords inside the file."
+  fi
+  return 0
 }
 
 merge_secrets_for_compose() {
@@ -643,7 +698,7 @@ write_env_for_compose() {
   : "${SEMAPHORE_ADMIN:=admin}"
   : "${SEMAPHORE_ADMIN_EMAIL:=admin@${DOMAIN:-example.com}}"
   : "${DOKU_IMAGE:=amerkurev/doku:latest}"
-  : "${DUPLICATI_IMAGE:=lscr.io/linuxserver/duplicati:latest}"
+  : "${DUPLICATI_IMAGE:=linuxserver/duplicati:latest}"
   : "${UPTIME_KUMA_IMAGE:=louislam/uptime-kuma:1}"
   : "${FILEBROWSER_IMAGE:=filebrowser/filebrowser:v2-s6}"
   : "${MONGO_IMAGE:=mongo:7}"
@@ -683,11 +738,12 @@ write_env_for_compose() {
   export COMPOSE_PROFILES
 
   local env_out="$STACK_ROOT/.env.stack"
-  local rp sp sk mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr dap dss dapi drp drcj rpp
+  local rp sp sk dsek mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr dap dss dapi drp drcj rpp
   rp="$(quote_for_env_stack "${REGISTRY_PASSWORD:-}")"
   rpp="$(quote_for_env_stack "${REGISTRY_PULL_PASSWORD:-}")"
   sp="$(quote_for_env_stack "${SEMAPHORE_ADMIN_PASSWORD:-}")"
   sk="$(quote_for_env_stack "${SEMAPHORE_ACCESS_KEY_ENCRYPTION:-}")"
+  dsek="$(quote_for_env_stack "${DUPLICATI_SETTINGS_ENCRYPTION_KEY:-}")"
   mp="$(quote_for_env_stack "${MONGO_ROOT_PASSWORD:-}")"
   pp="$(quote_for_env_stack "${POSTGRES_PASSWORD:-}")"
   mrp="$(quote_for_env_stack "${MARIADB_ROOT_PASSWORD:-}")"
@@ -772,6 +828,7 @@ write_env_for_compose() {
     echo "SEMAPHORE_ACCESS_KEY_ENCRYPTION=\"$sk\""
     echo "DUP_PUID=${DUP_PUID:-1000}"
     echo "DUP_PGID=${DUP_PGID:-1000}"
+    echo "DUPLICATI_SETTINGS_ENCRYPTION_KEY=\"$dsek\""
     echo "ENABLE_MONGO=${ENABLE_MONGO:-0}"
     echo "ENABLE_POSTGRES=${ENABLE_POSTGRES:-0}"
     echo "ENABLE_MARIADB=${ENABLE_MARIADB:-0}"
@@ -966,6 +1023,29 @@ prepare_deployer_image() {
   export DEPLOYER_IMAGE_EFFECTIVE DEPLOYER_REGISTRY_HOST
 }
 
+pre_pull_compose_images() {
+  local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+  local profile_args=("$@")
+  local image
+  local images=()
+
+  step "Docker images: pre-pull compose images"
+  if ! mapfile -t images < <(
+    docker compose "${profile_args[@]}" --env-file "$STACK_ROOT/.env.stack" \
+      -f "$SCRIPT_DIR/docker-compose.yml" config --images |
+      sed '/^[[:space:]]*$/d' |
+      sort -u
+  ); then
+    die "Failed to resolve compose image list."
+  fi
+
+  for image in "${images[@]}"; do
+    [ -n "$image" ] || continue
+    info "Pull image: $image"
+    retry_cmd "$retries" docker pull "$image" || die "Failed to pull image after ${retries} attempts: $image"
+  done
+}
+
 validate_tls_domain_config() {
   [[ "${ENABLE_TRAEFIK:-1}" == "1" ]] || return 0
 
@@ -1124,8 +1204,10 @@ setup_unattended() {
     return 0
   fi
   step "unattended-upgrades"
-  RUN apt-get update -qq
-  RUN env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unattended-upgrades
+  local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+  ensure_dns_ready
+  retry_run "$retries" apt-get update -o APT::Update::Error-Mode=any -qq
+  retry_run "$retries" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unattended-upgrades
   RUN dpkg-reconfigure -f noninteractive -plow unattended-upgrades || true
   info "Unattended security upgrades enabled."
 }
@@ -1182,9 +1264,11 @@ apply_ssh_hardening() {
     return 0
   fi
   local admin_username="${ADMIN_USERNAME:-adminops}"
+  local sshd_dropin="/etc/ssh/sshd_config.d/01-setup-server-stack.conf"
   step "SSH: hardening"
   RUN mkdir -p /etc/ssh/sshd_config.d
-  cat <<EOF | RUN tee /etc/ssh/sshd_config.d/60-setup-server-stack.conf >/dev/null
+  RUN rm -f /etc/ssh/sshd_config.d/60-setup-server-stack.conf
+  cat <<EOF | RUN tee "$sshd_dropin" >/dev/null
 # Generated by setup-server-stack.sh
 PermitRootLogin no
 PubkeyAuthentication yes
@@ -1198,7 +1282,7 @@ ClientAliveInterval 120
 ClientAliveCountMax 3
 EOF
   if [ -n "$admin_username" ] && [ "$admin_username" != "root" ] && id "$admin_username" &>/dev/null; then
-    echo "AllowUsers $admin_username" | RUN tee -a /etc/ssh/sshd_config.d/60-setup-server-stack.conf >/dev/null
+    echo "AllowUsers $admin_username" | RUN tee -a "$sshd_dropin" >/dev/null
   fi
   if RUN sshd -t 2>/dev/null; then
     RUN systemctl reload ssh 2>/dev/null || RUN systemctl reload sshd
@@ -1212,8 +1296,10 @@ setup_fail2ban() {
   [[ "${INSTALL_FAIL2BAN:-1}" == "1" ]] || return 0
   local ssh_port="${SSH_PORT:-22}"
   if command -v apt-get >/dev/null 2>&1; then
-    RUN apt-get update -qq
-    RUN env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban
+    local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+    ensure_dns_ready
+    retry_run "$retries" apt-get update -o APT::Update::Error-Mode=any -qq
+    retry_run "$retries" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban
     cat <<EOF | RUN tee /etc/fail2ban/jail.d/setup-server-stack.local >/dev/null
 [sshd]
 enabled = true
@@ -1246,8 +1332,10 @@ setup_ufw() {
   [[ "$ufw_enable" == "1" ]] || return 0
   local ssh_port="${SSH_PORT:-22}"
   if ! command -v ufw &>/dev/null; then
-    RUN apt-get update -qq
-    RUN env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ufw
+    local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+    ensure_dns_ready
+    retry_run "$retries" apt-get update -o APT::Update::Error-Mode=any -qq
+    retry_run "$retries" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ufw
   fi
   if ufw_apply_rules; then
     info "UFW: ports ${ssh_port}, 80, 443."
@@ -1256,7 +1344,9 @@ setup_ufw() {
   warn "UFW: iptables-restore failed, trying iptables-legacy..."
   RUN ufw disable 2>/dev/null || true
   if ! [ -x /usr/sbin/iptables-legacy ] && command -v apt-get &>/dev/null; then
-    RUN env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables 2>/dev/null || true
+    local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+    ensure_dns_ready
+    retry_run "$retries" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables 2>/dev/null || true
   fi
   if command -v update-alternatives &>/dev/null; then
     if [ -x /usr/sbin/iptables-legacy ]; then
@@ -1358,8 +1448,12 @@ main() {
       [ -n "$_p" ] && compose_args+=(--profile "$_p")
     done
   fi
-  docker compose "${compose_args[@]}" --env-file "$STACK_ROOT/.env.stack" \
-    -f "$SCRIPT_DIR/docker-compose.yml" up -d
+  pre_pull_compose_images "${compose_args[@]}"
+
+  local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+  step "Docker Compose: up"
+  retry_cmd "$retries" docker compose "${compose_args[@]}" --env-file "$STACK_ROOT/.env.stack" \
+    -f "$SCRIPT_DIR/docker-compose.yml" up -d || die "docker compose up failed after ${retries} attempts."
 
   print_urls
   if [[ "${SKIP_SSH_HARDENING:-0}" != "1" ]]; then
