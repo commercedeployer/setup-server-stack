@@ -77,7 +77,7 @@ Or: `.\deploy-from-windows.ps1 -RemoteHost 203.0.113.50`
 
 **Important:** create local **`cp .env.example .env`** with at least **`DOMAIN`** and **`ACME_EMAIL`** before running — otherwise the template goes to the server unchanged.
 
-On success, **`deploy-from-windows.ps1`** downloads server **`.secrets`** to local **`secrets/<timestamp>`**, then applies SSH hardening on the server.
+On success, **`deploy-from-windows.ps1`** downloads server **`.secrets`** to local **`secrets/<timestamp>`**, copies newly exported TLS cert files back to local **`certs/<host>/`** without overwriting existing files, then applies SSH hardening on the server.
 
 Connects as **`root`**. Password is asked **once** at the start (SSH multiplexing); or use **`-SshIdentityFile`** / **`-RootPassword`**.
 
@@ -124,7 +124,7 @@ DOMAIN=example.com
 ACME_EMAIL=admin@example.com
 STACK_ADMIN_USER=admin
 STACK_ADMIN_EMAIL=admin@example.com
-TRAEFIK_CERT_MODE=letsencrypt
+TRAEFIK_CERT_MODE=auto
 STACK_ROOT=.
 TZ=Europe/Helsinki
 ```
@@ -135,15 +135,39 @@ TZ=Europe/Helsinki
 
 | `TRAEFIK_CERT_MODE` | Use for | Browser trust |
 |---------------------|---------|---------------|
-| `letsencrypt` | Production | Trusted if DNS/ports/rate limits are OK |
-| `staging` | Reinstall-heavy QA | Browser warning is expected |
-| `selfsigned` | QA without Let's Encrypt requests | Browser warning is expected |
+| `auto` | Default production mode | Custom cert from `certs/<host>/` if present, otherwise trusted Let's Encrypt if DNS/ports/rate limits are OK |
+| `provided` | Bring your own certs only | Trusted only if your cert/key pair is valid for the exact host |
+| `letsencrypt` | Force production Let's Encrypt | Trusted if DNS/ports/rate limits are OK; custom certs are ignored by routing |
+| `staging` | Reinstall-heavy QA | Test Let's Encrypt cert; browser warning is expected |
+| `selfsigned` | QA without custom certs or Let's Encrypt | Traefik default/self-signed TLS; browser warning is expected |
 
-`ACME_EMAIL` is required for `letsencrypt` and `staging`; `selfsigned` does not contact Let's Encrypt.
+`ACME_EMAIL` is required for `auto`, `letsencrypt`, and `staging`; `provided` and `selfsigned` do not contact Let's Encrypt.
+
+Custom certificates are optional. Put them in this form before running the installer:
+
+```text
+certs/<host>/fullchain.pem
+certs/<host>/privkey.pem
+```
+
+Example: `certs/portainer.example.com/fullchain.pem` + `certs/portainer.example.com/privkey.pem`. On the server this directory is always `${STACK_ROOT}/certs`; the path is intentionally not configurable in `.env`. The `<host>` folder name must be the exact FQDN used by the service. Private keys are ignored by git; Windows deploy uploads host folders from `certs/` to the server.
+
+When production Let's Encrypt succeeds in `auto` or `letsencrypt` mode, the installer exports issued certificates back into the same structure (`certs/<host>/fullchain.pem` + `privkey.pem`) on the server. Existing files are kept and are not overwritten.
 
 Production and staging ACME storage files are separate (`acme.json` / `acme-staging.json`), so QA certificates do not pollute production checks.
 
 After `docker compose up`, the installer checks every enabled HTTPS host and prints `TLS OK` or `TLS WARN`. This matters because Let's Encrypt can issue some host certificates and then reject the rest due to DNS, ports, or rate limits.
+
+**NGINX static site:**
+
+Set `ENABLE_NGINX=1` to publish a static site through Traefik. By default it uses the root domain:
+
+```env
+ENABLE_NGINX=1
+# NGINX_HOST=www.example.com  # optional; empty = DOMAIN
+```
+
+Runtime files always live in `${STACK_ROOT}/nginx/public/`. On first install only, when that runtime folder is empty, the installer copies the seed contents from `setup-server-stack/public/`. On every re-run, if the folder already contains any file, the installer keeps the existing site and does not overwrite it.
 
 ### Step 4. Run the installer
 
@@ -159,11 +183,12 @@ On first run the script:
 - generates random passwords → **`.secrets`**;
 - builds Traefik htpasswd (dashboard + Doku);
 - generates JWT keys and **`auth_config.yml`**;
+- initializes `$STACK_ROOT/nginx/public` from `public/` only when `ENABLE_NGINX=1` and the runtime folder is empty;
 - writes **`$STACK_ROOT/.env.stack`** (chmod 600);
 - runs **`docker compose --env-file .env.stack up -d`**;
 - checks TLS certificates per enabled HTTPS host and prints clear `TLS OK` / `TLS WARN` lines.
 
-Re-run without flags: does **not** remove volumes or overwrite existing secrets / `acme.json`.
+Re-run without flags: does **not** remove volumes, overwrite existing secrets / `acme.json`, or replace files already present in `$STACK_ROOT/nginx/public`.
 
 To regenerate secrets (changes passwords — update clients):
 
@@ -223,11 +248,13 @@ Replace `example.com` with your **`DOMAIN`**:
 | Duplicati | `https://duplicati.example.com` | Password: `DUPLICATI_WEBSERVICE_PASSWORD` from secrets; backup jobs configured in UI (see §8) |
 | Uptime Kuma | `https://kuma.example.com` | Create admin on first visit; secrets marker: `UPTIME_KUMA_ADMIN_PASSWORD=SET_ON_FIRST_LOGIN` |
 | Filebrowser | `https://filebrowser.example.com` | `STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; rw host path from `FILEBROWSER_ROOT_PATH` (empty = `$STACK_ROOT/filebrowser/files`) |
-| Deployer | `https://deployer.example.com` | `STACK_ADMIN_USER` / `DEPLOYER_ADMIN_PASSWORD` |
+| Deployer | `https://deployer.example.com` | `DEPLOYER_AUTH_MODE=dual` by default: UI uses `STACK_ADMIN_USER` / `DEPLOYER_ADMIN_PASSWORD`; API uses `DEPLOYER_API_KEY` |
 
 **Filebrowser:** by default only `$STACK_ROOT/filebrowser/files` is exposed (not the whole server). Setting `FILEBROWSER_ROOT_PATH=/` mounts the entire host — avoid on production. See [SECURITY.md](SECURITY.md#web-panels-https-edge).
 
 `registry-auth.example.com` is **Registry auth** (Docker token protocol, powered by `docker_auth`; not a human panel).
+
+**Deployer auth modes:** `dual` = UI session and API key (default), `api` = deploy API requires `x-api-key`, `ui` = web session only and no API key is generated.
 
 **Security:** only **Traefik** and **Doku** use Traefik Basic Auth. Other panels in the table rely on app login or first-visit setup — see [SECURITY.md](SECURITY.md#web-panels-https-edge).
 
@@ -323,12 +350,12 @@ Deployer is a **separate** open-source product ([github.com/commercedeployer/dep
 
 | Registry | `DEPLOYER_IMAGE` | Verify before install |
 |----------|------------------|------------------------|
-| Docker Hub (recommended) | `docker.io/commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
+| Docker Hub (recommended) | `commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
 | GHCR | `ghcr.io/commercedeployer/deployer:latest` | `docker pull ghcr.io/commercedeployer/deployer:latest` |
 
 ```env
 ENABLE_DEPLOYER=1
-DEPLOYER_IMAGE=docker.io/commercedeployer/deployer:latest
+DEPLOYER_IMAGE=commercedeployer/deployer:latest
 ```
 
 Docker Hub: [hub.docker.com/r/commercedeployer/deployer](https://hub.docker.com/r/commercedeployer/deployer). GHCR uses the same org: `ghcr.io/commercedeployer/deployer`.
@@ -383,6 +410,14 @@ Contributor check (no VPS): `bash tests/run-ci.sh` — uses `tests/fixtures/*.en
 2. **502 / no response** — `docker compose ... ps`, `docker logs <container>`.
 3. **Registry login fails** — check `STACK_ADMIN_USER` / `REGISTRY_PASSWORD` in `.env` and secrets; re-run `sudo bash ./setup-server-stack.sh`; verify `config/docker_auth/auth_config.yml` and `certs/` (generated by script). Client: `docker login registry.${DOMAIN}`.
 4. **Forgot Traefik or Doku password** — `.secrets` or `--force-secrets` (regenerates all secrets).
+5. **Let's Encrypt rate limit** — install can finish with `TLS WARN` and a browser warning for some hosts. The installer prints `TLS RATE LIMIT` and `retry after ... UTC` when Traefik exposes that value. After the cooldown, retry certificate issuance without rebuilding or stopping the stack:
+
+```bash
+cd /opt/setup-server-stack
+docker compose --env-file .env.stack -f docker-compose.yml restart traefik
+```
+
+Already issued certificates stay in `${STACK_ROOT}/traefik/acme.json`; do not run `down -v` and do not delete volumes just to retry TLS.
 
 ---
 
@@ -394,7 +429,9 @@ Contributor check (no VPS): `bash tests/run-ci.sh` — uses `tests/fixtures/*.en
 | `.env` / `.env.stack` | Settings; `.env.stack` built by script (chmod 600) |
 | `.secrets` | Auto-generated passwords (not in git) |
 | `${STACK_ROOT}/traefik/acme.json` | Let's Encrypt certificates |
+| `${STACK_ROOT}/certs/<host>/` | Custom TLS certificates and exported production Let's Encrypt certs (`privkey.pem` is secret) |
 | `${STACK_ROOT}/certs/registry-token*.pem` | JWT signing for Registry + Registry auth |
+| `${STACK_ROOT}/nginx/public/` | Static site files served by NGINX when `ENABLE_NGINX=1` |
 | `${STACK_ROOT}/config/traefik/htpasswd*` | Basic Auth for Traefik / Doku |
 | `${STACK_ROOT}/config/pgadmin/` | pgAdmin auto-connect (if enabled) |
 

@@ -14,9 +14,9 @@
 
 | Категория | Сервисы |
 |-----------|---------|
-| Сеть и TLS | Traefik 3.6, Let's Encrypt production/staging, self-signed QA-режим |
+| Сеть и TLS | Traefik 3.6, свои сертификаты из `certs/<host>/`, Let's Encrypt production/staging, self-signed QA-режим |
 | Образы | Private Docker Registry + Registry auth (`docker_auth` token flow) |
-| Операции | Portainer, Watchtower, Semaphore, Doku, Duplicati, Uptime Kuma, Filebrowser |
+| Операции | Portainer, Watchtower, Semaphore, Doku, Duplicati, Uptime Kuma, Filebrowser, статический сайт NGINX |
 | Деплой приложений | Deployer (опционально, `ENABLE_DEPLOYER=1` + `DEPLOYER_IMAGE`) |
 | Базы данных | MongoDB, PostgreSQL, MariaDB, MySQL (опционально) |
 | Веб-морды БД | mongo-express, pgAdmin (автопривязка к Postgres), Adminer |
@@ -35,8 +35,10 @@ cd setup-server-stack
 cp .env.example .env
 # .env.example — полный QA-стек; удалите ENABLE_*=1 для ненужных сервисов
 # Заполните DOMAIN, ACME_EMAIL, SSH_PUBLIC_KEY
+# TLS по умолчанию: TRAEFIK_CERT_MODE=auto ($STACK_ROOT/certs/<host>, если есть; иначе Let's Encrypt)
+# Статический сайт: ENABLE_NGINX=1 публикует $STACK_ROOT/nginx/public на https://DOMAIN
 # Для частых QA-переустановок: TRAEFIK_CERT_MODE=staging или selfsigned
-# Deployer: ENABLE_DEPLOYER=1 и DEPLOYER_IMAGE=docker.io/commercedeployer/deployer:latest
+# Deployer: ENABLE_DEPLOYER=1 и DEPLOYER_IMAGE=commercedeployer/deployer:latest
 chmod +x setup-server-stack.sh install.sh
 sudo bash ./setup-server-stack.sh
 ```
@@ -62,7 +64,7 @@ sudo bash ./setup-server-stack.sh
 
 Setup Server Stack — **нижний слой** (инфраструктура VPS):
 
-- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` и `DEPLOYER_IMAGE` (`docker.io/commercedeployer/deployer:latest` или `ghcr.io/commercedeployer/deployer:latest`).
+- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` и `DEPLOYER_IMAGE` (`commercedeployer/deployer:latest` или `ghcr.io/commercedeployer/deployer:latest`).
 - **D-Commerce** — коммерческая витрина и биллинг; на проде вызывает Deployer по HTTP. Stack и Deployer работают **без** D-Commerce.
 
 ---
@@ -81,4 +83,4 @@ Setup Server Stack — **нижний слой** (инфраструктура V
 
 ## Статус
 
-Версия установщика: **1.0.0** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).
+Версия установщика: **1.1.0** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).

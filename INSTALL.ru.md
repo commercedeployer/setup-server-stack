@@ -87,7 +87,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
 
 **Важно:** перед запуском создайте локально **`cp .env.example .env`** и пропишите в `.env` хотя бы **`DOMAIN`** и **`ACME_EMAIL`** — иначе на сервер уедет шаблон с `example.com`. Скрипт `setup-server-stack.sh` при отсутствии `.env` на сервере завершится с ошибкой; удобнее один раз подготовить `.env` на ПК и дать скрипту залить его вместе с остальным.
 
-После успешной установки **`deploy-from-windows.ps1`** скачивает серверный **`.secrets`** в локальный архив **`secrets/<timestamp>`**, затем включает SSH hardening на сервере.
+После успешной установки **`deploy-from-windows.ps1`** скачивает серверный **`.secrets`** в локальный архив **`secrets/<timestamp>`**, копирует новые экспортированные TLS-файлы обратно в локальные **`certs/<host>/`** без перезаписи существующих файлов, затем включает SSH hardening на сервере.
 
 Подключение под **`root`**. Пароль спрашивается **один раз** в начале (дальше копирование и установка идут по одной SSH-сессии); либо **`-SshIdentityFile`** / **`-RootPassword`**. Docker на VPS: уже установлен или **`INSTALL_DOCKER=1`** в `.env` (§2.1).
 
@@ -142,7 +142,7 @@ DOMAIN=company.ru
 ACME_EMAIL=admin@company.ru
 STACK_ADMIN_USER=admin
 STACK_ADMIN_EMAIL=admin@company.ru
-TRAEFIK_CERT_MODE=letsencrypt
+TRAEFIK_CERT_MODE=auto
 STACK_ROOT=.
 TZ=Europe/Helsinki
 ```
@@ -153,15 +153,39 @@ TZ=Europe/Helsinki
 
 | `TRAEFIK_CERT_MODE` | Для чего | Что увидит браузер |
 |---------------------|----------|--------------------|
-| `letsencrypt` | Продакшен | Доверенный сертификат, если DNS/порты/лимиты в порядке |
-| `staging` | Частые QA-переустановки | Предупреждение браузера ожидаемо |
-| `selfsigned` | QA без запросов в Let's Encrypt | Предупреждение браузера ожидаемо |
+| `auto` | Дефолтный production-режим | Сначала свой сертификат из `certs/<host>/`, если он есть; иначе доверенный Let's Encrypt, если DNS/порты/лимиты в порядке |
+| `provided` | Только свои сертификаты | Доверенный, только если ваша пара cert/key подходит для точного host |
+| `letsencrypt` | Принудительно production Let's Encrypt | Доверенный, если DNS/порты/лимиты в порядке; свои сертификаты игнорируются маршрутизацией |
+| `staging` | Частые QA-переустановки | Тестовый Let's Encrypt; предупреждение браузера ожидаемо |
+| `selfsigned` | QA без своих сертификатов и без Let's Encrypt | Дефолтный/self-signed TLS Traefik; предупреждение браузера ожидаемо |
 
-`ACME_EMAIL` обязателен для `letsencrypt` и `staging`; в `selfsigned` установщик не обращается в Let's Encrypt.
+`ACME_EMAIL` обязателен для `auto`, `letsencrypt` и `staging`; в `provided` и `selfsigned` установщик не обращается в Let's Encrypt.
+
+Свои сертификаты опциональны. До запуска установщика положите их в таком формате:
+
+```text
+certs/<host>/fullchain.pem
+certs/<host>/privkey.pem
+```
+
+Пример: `certs/portainer.company.ru/fullchain.pem` + `certs/portainer.company.ru/privkey.pem`. На сервере это всегда `${STACK_ROOT}/certs`; путь намеренно не настраивается в `.env`. Имя папки `<host>` должно точно совпадать с FQDN сервиса. Private key не попадает в git; Windows deploy загрузит host-папки из `certs/` на сервер.
+
+Когда production Let's Encrypt успешно выпускает сертификат в режиме `auto` или `letsencrypt`, установщик экспортирует его на сервере в ту же структуру (`certs/<host>/fullchain.pem` + `privkey.pem`). Уже существующие файлы не перезаписываются.
 
 Production и staging ACME-хранилища разделены (`acme.json` / `acme-staging.json`), поэтому QA-сертификаты не загрязняют боевую проверку.
 
 После `docker compose up` установщик проверяет каждый включённый HTTPS-host и печатает `TLS OK` или `TLS WARN`. Это важно: Let's Encrypt может успеть выпустить сертификаты для части поддоменов, а потом отказать остальным из-за DNS, портов или лимитов.
+
+**Статический сайт NGINX:**
+
+Поставьте `ENABLE_NGINX=1`, чтобы опубликовать статический сайт через Traefik. По умолчанию используется корневой домен:
+
+```env
+ENABLE_NGINX=1
+# NGINX_HOST=www.company.ru  # опционально; пусто = DOMAIN
+```
+
+Рабочие файлы сайта всегда лежат в `${STACK_ROOT}/nginx/public/`. Только при первом запуске, когда эта runtime-папка пустая, установщик копирует стартовое содержимое из `setup-server-stack/public/`. При повторном запуске, если в папке уже есть хотя бы один файл, установщик оставляет сайт как есть и ничего не перезаписывает.
 
 ### Шаг 4. Сделать скрипт исполняемым и запустить установку
 
@@ -179,6 +203,7 @@ sudo bash ./setup-server-stack.sh
 - сгенерирует **ключи JWT** для Registry / Registry auth;
 - соберёт **`auth_config.yml`** из шаблона;
 - соберёт **`config/docker/config.json`** для Watchtower (чтобы тянуть образы с вашего registry);
+- инициализирует `$STACK_ROOT/nginx/public` из `public/` только если `ENABLE_NGINX=1` и runtime-папка пустая;
 - сгенерирует **`$STACK_ROOT/.env.stack`** (один файл для `docker compose --env-file`, chmod 600);
 - выполнит **`docker compose --env-file .env.stack up -d`** (путь к `.env.stack` — в **`$STACK_ROOT`**);
 - проверит TLS-сертификаты по каждому включённому HTTPS-host и явно напишет `TLS OK` / `TLS WARN`.
@@ -189,7 +214,8 @@ sudo bash ./setup-server-stack.sh
 
 - **не** удалит тома контейнеров;
 - **не** перезапишет уже существующие секреты в `.secrets` без необходимости;
-- **не** трогает `acme.json` с сертификатами так, чтобы сломать выдачу LE.
+- **не** трогает `acme.json` с сертификатами так, чтобы сломать выдачу LE;
+- **не** заменит файлы сайта, если они уже есть в `$STACK_ROOT/nginx/public`.
 
 Если нужно **пересоздать секреты** (осторожно: сменятся пароли, может понадобиться заново залогиниться в registry и обновить клиенты):
 
@@ -262,11 +288,13 @@ docker compose -f docker-compose.yml --env-file .env.stack ps
 | Duplicati | `https://duplicati.company.ru` | Пароль **`DUPLICATI_WEBSERVICE_PASSWORD`** из secrets; задания бэкапа настраиваются в UI (§8) |
 | Uptime Kuma | `https://kuma.company.ru` | **Первый заход** — создаёте админа в UI; marker в secrets: `UPTIME_KUMA_ADMIN_PASSWORD=SET_ON_FIRST_LOGIN` |
 | Filebrowser | `https://filebrowser.company.ru` | Логин **`STACK_ADMIN_USER`**, пароль **`FILEBROWSER_PASSWORD`** в `.secrets`; каталог на хосте — `FILEBROWSER_ROOT_PATH` (пусто = `$STACK_ROOT/filebrowser/files`) |
-| Deployer (если включён) | `https://deployer.company.ru` | Логин **`STACK_ADMIN_USER`**, пароль **`DEPLOYER_ADMIN_PASSWORD`** |
+| Deployer (если включён) | `https://deployer.company.ru` | По умолчанию **`DEPLOYER_AUTH_MODE=dual`**: UI — **`STACK_ADMIN_USER`** / **`DEPLOYER_ADMIN_PASSWORD`**; API — **`DEPLOYER_API_KEY`** |
 
 **Filebrowser:** по умолчанию открыт только каталог `$STACK_ROOT/filebrowser/files`, не весь сервер. `FILEBROWSER_ROOT_PATH=/` монтирует весь хост (rw) — на проде не используйте. См. [SECURITY.ru.md](SECURITY.ru.md#веб-панели-край-https).
 
 Поддомен **`registry-auth.company.ru`** — сервис **Registry auth** (технический endpoint протокола Docker, работает на `docker_auth`; не «панель для людей»).
+
+**Режимы Deployer:** `dual` = web session и API key (по умолчанию), `api` = deploy API требует `x-api-key`, `ui` = только web session, API key не генерируется.
 
 **Безопасность:** Traefik Basic Auth есть только у **Traefik** и **Doku**. Остальные панели в таблице — логин приложения или «первый заход»; подробнее [SECURITY.ru.md](SECURITY.ru.md#веб-панели-край-https).
 
@@ -383,12 +411,12 @@ Deployer — **отдельный** open-source продукт ([github.com/comm
 
 | Registry | `DEPLOYER_IMAGE` | Проверка до установки |
 |----------|------------------|------------------------|
-| Docker Hub (рекомендуется) | `docker.io/commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
+| Docker Hub (рекомендуется) | `commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
 | GHCR | `ghcr.io/commercedeployer/deployer:latest` | `docker pull ghcr.io/commercedeployer/deployer:latest` |
 
 ```env
 ENABLE_DEPLOYER=1
-DEPLOYER_IMAGE=docker.io/commercedeployer/deployer:latest
+DEPLOYER_IMAGE=commercedeployer/deployer:latest
 ```
 
 Страница на Hub: [hub.docker.com/r/commercedeployer/deployer](https://hub.docker.com/r/commercedeployer/deployer). На GHCR тот же org: `ghcr.io/commercedeployer/deployer`.
@@ -446,6 +474,14 @@ bash tests/run-ci.sh
 2. **502 / нет ответа** — `docker compose ... ps` и `docker logs имя-контейнера`.
 3. **Не пускает в registry** — проверьте `STACK_ADMIN_USER` / `REGISTRY_PASSWORD` в `.env` и `.secrets`; перезапустите `sudo bash ./setup-server-stack.sh`. Убедитесь, что `config/docker_auth/auth_config.yml` и ключи в `certs/` согласованы (генерируются скриптом). Клиент: `docker login registry.${DOMAIN}`.
 4. **Забыли пароль Traefik или Doku** — смотрите `.secrets` (`TRAEFIK_DASHBOARD_PASSWORD`, `DOKU_DASHBOARD_PASSWORD`) или пересоздайте соответствующий `htpasswd*` через `sudo bash ./setup-server-stack.sh --force-secrets` (осторожно: пересоздаст и другие секреты).
+5. **Лимит Let's Encrypt** — установка может завершиться с `TLS WARN`, а браузер будет ругаться на часть host-ов. Установщик пишет `TLS RATE LIMIT` и `retry after ... UTC`, если Traefik отдал это время в логах. После cooldown повторите выпуск без пересборки и без остановки всего стека:
+
+```bash
+cd /opt/setup-server-stack
+docker compose --env-file .env.stack -f docker-compose.yml restart traefik
+```
+
+Уже выпущенные сертификаты остаются в `${STACK_ROOT}/traefik/acme.json`; не делайте `down -v` и не удаляйте volumes только ради повторной попытки TLS.
 
 ---
 
@@ -457,7 +493,9 @@ bash tests/run-ci.sh
 | `.env` / `.env.stack` | Настройки; `.env.stack` собирается скриптом (chmod 600) |
 | `.secrets` | Автогенерируемые пароли (не в git) |
 | `${STACK_ROOT}/traefik/acme.json` | Сертификаты Let's Encrypt |
+| `${STACK_ROOT}/certs/<host>/` | Свои TLS-сертификаты и экспортированные production Let's Encrypt certs (`privkey.pem` — секрет) |
 | `${STACK_ROOT}/certs/registry-token*.pem` | JWT для Registry + Registry auth |
+| `${STACK_ROOT}/nginx/public/` | Файлы статического сайта, который отдаёт NGINX при `ENABLE_NGINX=1` |
 | `${STACK_ROOT}/config/traefik/htpasswd*` | Basic Auth Traefik / Doku |
 | `${STACK_ROOT}/config/pgadmin/` | Автоподключение pgAdmin (если включён) |
 

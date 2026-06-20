@@ -34,9 +34,11 @@ All other HTTPS panels rely on **application login only** (or a first-visit setu
 **What this means**
 
 - HTTPS encrypts traffic but does **not** add a second gate on most panels — protect them with strong app passwords and leave unused services unset (or set `ENABLE_*=0`).
+- `TRAEFIK_CERT_MODE=auto` can load private keys from `certs/<host>/privkey.pem`; real host folders are ignored by git and must be treated like secrets.
 - `TRAEFIK_CERT_MODE=staging` and `TRAEFIK_CERT_MODE=selfsigned` are QA modes. They keep HTTPS routing, but browsers will not trust the certificate.
 - **First-visit setup** (Portainer, Uptime Kuma): complete admin onboarding immediately after install so an anonymous visitor cannot claim the instance.
 - **Filebrowser** exposes only `FILEBROWSER_ROOT_PATH` on the host (default: `$STACK_ROOT/filebrowser/files`). Do **not** set it to `/` on production.
+- **NGINX static site** publishes everything under `$STACK_ROOT/nginx/public`. Do not put secrets, backups, `.env` files, or private keys there.
 - Optional hardening (IP allowlist, Traefik middleware, VPN-only access) is **not** configured by default.
 
 ## Report a vulnerability

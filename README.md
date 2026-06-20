@@ -14,9 +14,9 @@ Works as a **main** host (Traefik, registry, panels) or a lean **node** via [Com
 
 | Category | Services |
 |----------|----------|
-| Network & TLS | Traefik 3.6, Let's Encrypt production/staging, self-signed QA mode |
+| Network & TLS | Traefik 3.6, custom certs from `certs/<host>/`, Let's Encrypt production/staging, self-signed QA mode |
 | Images | Private Docker Registry + Registry auth (`docker_auth` token flow) |
-| Operations | Portainer, Watchtower, Semaphore, Doku, Duplicati, Uptime Kuma, Filebrowser |
+| Operations | Portainer, Watchtower, Semaphore, Doku, Duplicati, Uptime Kuma, Filebrowser, NGINX static site |
 | App deployment | Deployer (optional, `ENABLE_DEPLOYER=1` + `DEPLOYER_IMAGE`) |
 | Databases | MongoDB, PostgreSQL, MariaDB, MySQL (optional) |
 | DB web UIs | mongo-express, pgAdmin (auto-linked to Postgres), Adminer |
@@ -35,8 +35,10 @@ cd setup-server-stack
 cp .env.example .env
 # .env.example is a full QA stack; remove ENABLE_*=1 lines you do not need
 # Set DOMAIN, ACME_EMAIL, SSH_PUBLIC_KEY
+# TLS default: TRAEFIK_CERT_MODE=auto ($STACK_ROOT/certs/<host> if present, otherwise Let's Encrypt)
+# Static site: ENABLE_NGINX=1 publishes $STACK_ROOT/nginx/public on https://DOMAIN
 # For reinstall-heavy QA: TRAEFIK_CERT_MODE=staging or selfsigned
-# Deployer: ENABLE_DEPLOYER=1 and DEPLOYER_IMAGE=docker.io/commercedeployer/deployer:latest
+# Deployer: ENABLE_DEPLOYER=1 and DEPLOYER_IMAGE=commercedeployer/deployer:latest
 chmod +x setup-server-stack.sh install.sh
 sudo bash ./setup-server-stack.sh
 ```
@@ -62,7 +64,7 @@ Re-run after editing `.env`: `sudo bash ./setup-server-stack.sh`.
 
 Setup Server Stack is the **infrastructure layer**:
 
-- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source Docker deploy API; enable with `ENABLE_DEPLOYER=1` and `DEPLOYER_IMAGE` (`docker.io/commercedeployer/deployer:latest` or `ghcr.io/commercedeployer/deployer:latest`).
+- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source Docker deploy API; enable with `ENABLE_DEPLOYER=1` and `DEPLOYER_IMAGE` (`commercedeployer/deployer:latest` or `ghcr.io/commercedeployer/deployer:latest`).
 - **D-Commerce** — commercial storefront and billing; calls Deployer over HTTP. Stack and Deployer work **without** D-Commerce.
 
 ---
@@ -81,4 +83,4 @@ Empty passwords in `.env` are filled on first run into server **`.secrets`** (ch
 
 ## Status
 
-Installer version: **1.0.0** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).
+Installer version: **1.1.0** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).

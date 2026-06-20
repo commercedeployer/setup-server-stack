@@ -7,7 +7,7 @@
 
   Host: DOMAIN in .env or -RemoteHost. Remote path: SETUP_SERVER_STACK_ROOT in .env or /opt/setup-server-stack.
   Options: -SkipInstall, -ForceSecrets, -SshIdentityFile path\to\key, -RootPassword (SecureString)
-  After install: downloads server .secrets to LocalStackPath\secrets\<timestamp>, then applies SSH hardening on the server.
+  After install: downloads server .secrets to LocalStackPath\secrets\<timestamp>, downloads exported TLS certs to certs\<host>, then applies SSH hardening on the server.
 #>
 
 [CmdletBinding()]
@@ -135,6 +135,18 @@ $excludeFiles = @(
 if ($LASTEXITCODE -ge 8) {
     Write-Error "robocopy staging failed with exit code $LASTEXITCODE."
 }
+$localCerts = Join-Path $LocalStackPath "certs"
+if (Test-Path -LiteralPath $localCerts) {
+    $certsTarget = Join-Path $st "certs"
+    New-Item -ItemType Directory -Path $certsTarget -Force | Out-Null
+    Get-ChildItem -LiteralPath $localCerts -Directory | ForEach-Object {
+        $targetDir = Join-Path $certsTarget $_.Name
+        & robocopy.exe $_.FullName $targetDir /E /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
+        if ($LASTEXITCODE -ge 8) {
+            Write-Error "robocopy TLS certificates failed for $($_.Name) with exit code $LASTEXITCODE."
+        }
+    }
+}
 $CopySourcePath = $st
 $script:DeployStagingPath = $stRoot
 $localLeaf = Split-Path -Leaf $CopySourcePath
@@ -171,7 +183,35 @@ $sedLf = 'for f in setup-server-stack.sh install.sh lib/setup-server-stack-lib.s
 $installFlag = if ($ForceSecrets) { " --force-secrets" } else { "" }
 $remoteInstallCmd = (('cd ''{0}'' ' + $aa + ' ' + $sedLf + ' ' + $aa + ' chmod +x setup-server-stack.sh install.sh ' + $aa + ' bash ./setup-server-stack.sh --skip-ssh-hardening{1}') -f $RemotePath, $installFlag)
 $remoteHardenCmd = (('cd ''{0}'' ' + $aa + ' bash ./setup-server-stack.sh --ssh-hardening-only') -f $RemotePath)
-$remotePrepare = (('rm -rf ''{0}'' ' + $aa + ' mkdir -p ''{1}''') -f $RemotePath, $remoteParent)
+$remoteStateDir = "/tmp/setup-server-stack-preserve-$PID"
+$runtimePaths = @(".secrets", ".env.stack", "traefik", "certs", "config", "filebrowser", "nginx", "secrets", "docker-compose.override.yml")
+$runtimeList = ($runtimePaths | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join " "
+$remotePrepare = @"
+set -eu
+rm -rf '$remoteStateDir'
+mkdir -p '$remoteStateDir' '$remoteParent'
+if [ -d '$RemotePath' ]; then
+  for p in $runtimeList; do
+    if [ -e '$RemotePath'/"`$p" ]; then
+      mv '$RemotePath'/"`$p" '$remoteStateDir'/
+    fi
+  done
+  rm -rf '$RemotePath'
+fi
+"@ -replace "`r`n", "`n" -replace "`r", ""
+$remoteRestore = @"
+set -eu
+mkdir -p '$RemotePath'
+if [ -d '$remoteStateDir' ]; then
+  for p in $runtimeList; do
+    if [ -e '$remoteStateDir'/"`$p" ]; then
+      rm -rf '$RemotePath'/"`$p"
+      mv '$remoteStateDir'/"`$p" '$RemotePath'/
+    fi
+  done
+  rmdir '$remoteStateDir' 2>/dev/null || true
+fi
+"@ -replace "`r`n", "`n" -replace "`r", ""
 
 function ConvertTo-PlainText([Security.SecureString]$Secure) {
     if (-not $Secure) { return $null }
@@ -423,6 +463,11 @@ try {
     Invoke-DeployScp -BaseArgs $ca -ExtraArgs @("-r", "$CopySourcePath", $scpTarget)
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+    Invoke-DeploySsh -BaseArgs $sa -ExtraArgs @($sshTarget, $remoteRestore)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to restore preserved runtime files on the server."
+    }
+
     if ($localLeaf -ne $remoteLeaf) {
         Write-Error "Local folder name ($localLeaf) does not match $remoteLeaf. Set SETUP_SERVER_STACK_ROOT in .env or enable robocopy staging."
     }
@@ -451,6 +496,45 @@ try {
         Write-Error "Secrets file missing after download: $localSecrets"
     }
     Write-Host "Secrets saved locally (do not commit)." -ForegroundColor DarkGray
+
+    if (Test-Cmd "tar") {
+        $remoteCertArchive = "/tmp/setup-server-stack-certs-$PID.tgz"
+        $localCertArchive = Join-Path $env:TEMP ("setup-server-stack-certs-{0}.tgz" -f $PID)
+        $localCertExtract = Join-Path $env:TEMP ("setup-server-stack-certs-{0}" -f $PID)
+        if (Test-Path -LiteralPath $localCertExtract) { Remove-Item -LiteralPath $localCertExtract -Recurse -Force }
+        New-Item -ItemType Directory -Path $localCertExtract -Force | Out-Null
+        $remoteCertArchiveCmd = "cd '$RemotePath' && if [ -d certs ]; then find certs -mindepth 2 -maxdepth 2 -type f \( -name fullchain.pem -o -name privkey.pem \) | tar -czf '$remoteCertArchive' -T -; else tar -czf '$remoteCertArchive' --files-from /dev/null; fi"
+        Write-Host "Downloading exported TLS certificates to local certs\\<host> ..." -ForegroundColor Green
+        Invoke-DeploySsh -BaseArgs $sa -ExtraArgs @($sshTarget, $remoteCertArchiveCmd)
+        if ($LASTEXITCODE -eq 0) {
+            Invoke-DeployScp -BaseArgs $ca -ExtraArgs @("${sshTarget}:$remoteCertArchive", $localCertArchive)
+            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $localCertArchive)) {
+                & tar.exe -xzf $localCertArchive -C $localCertExtract
+                $downloaded = 0
+                $extractedCerts = Join-Path $localCertExtract "certs"
+                if (Test-Path -LiteralPath $extractedCerts) {
+                    Get-ChildItem -LiteralPath $extractedCerts -Recurse -File | Where-Object { $_.Name -in @("fullchain.pem", "privkey.pem") } | ForEach-Object {
+                        $rel = $_.FullName.Substring($localCertExtract.Length).TrimStart([char[]]@('\', '/'))
+                        $target = Join-Path $LocalStackPath $rel
+                        if (-not (Test-Path -LiteralPath $target)) {
+                            New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+                            Copy-Item -LiteralPath $_.FullName -Destination $target
+                            $downloaded++
+                        }
+                    }
+                }
+                if ($downloaded -gt 0) {
+                    Write-Host "Saved $downloaded TLS certificate files locally under certs\\<host>." -ForegroundColor Green
+                } else {
+                    Write-Host "No new TLS certificate files to save locally." -ForegroundColor DarkGray
+                }
+            }
+        }
+        Invoke-DeploySsh -BaseArgs $sa -ExtraArgs @($sshTarget, "rm -f '$remoteCertArchive'") | Out-Null
+        Remove-Item -LiteralPath $localCertArchive, $localCertExtract -Recurse -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "Skipping TLS certificate download: local tar command was not found." -ForegroundColor Yellow
+    }
 
     Write-Host "5/5 SSH hardening on server..." -ForegroundColor Green
     Invoke-DeploySsh -BaseArgs $sa -ExtraArgs @($sshTarget, $remoteHardenCmd)

@@ -15,6 +15,10 @@ secrets-backup.txt
 
 # Traefik / TLS
 traefik/acme.json
+certs/*
+!certs/.gitkeep
+!certs/README.md
+!certs/README.ru.md
 
 # Generated JWT keys (registry ↔ docker_auth)
 certs/*.pem

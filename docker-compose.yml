@@ -1,4 +1,4 @@
-# Setup Server Stack (Traefik 3.6, Registry + Registry auth, Portainer, Watchtower, Semaphore, Doku, Duplicati, Kuma, Filebrowser).
+# Setup Server Stack (Traefik 3.6, Registry + Registry auth, Portainer, Watchtower, Semaphore, Doku, Duplicati, Kuma, Filebrowser, NGINX static site).
 # Optional DBs and DB UIs: use COMPOSE_PROFILES or `docker compose --profile <name>`.
 # Run: sudo bash setup-server-stack.sh — writes $STACK_ROOT/.env.stack for docker compose.
 
@@ -27,6 +27,8 @@ services:
       - ${TRAEFIK_ACME_STORAGE_FILE:-${STACK_ROOT}/traefik/acme.json}:/letsencrypt/acme.json
       - ${STACK_ROOT}/config/traefik/htpasswd:/etc/traefik/htpasswd:ro
       - ${STACK_ROOT}/config/traefik/htpasswd-doku:/etc/traefik/htpasswd-doku:ro
+      - ${STACK_ROOT}/config/traefik/provided-certificates.yml:/etc/traefik/dynamic/provided-certificates.yml:ro
+      - ${STACK_ROOT}/certs:/certs:ro
     command:
       - --log.level=INFO
       - --api.dashboard=true
@@ -34,6 +36,8 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=proxynet
+      - --providers.file.filename=/etc/traefik/dynamic/provided-certificates.yml
+      - --providers.file.watch=true
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
@@ -262,9 +266,29 @@ services:
     networks:
       - proxynet
 
+  nginx:
+    profiles: [nginx]
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    container_name: nginx-static
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${STACK_ROOT}/nginx/public:/usr/share/nginx/html:ro
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxynet
+      - traefik.http.routers.nginx-static.rule=Host(`${NGINX_HOST:-${DOMAIN}}`)
+      - traefik.http.routers.nginx-static.entrypoints=websecure
+      - traefik.http.routers.nginx-static.tls=true
+      - traefik.http.routers.nginx-static.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}
+      - traefik.http.services.nginx-static.loadbalancer.server.port=80
+    networks:
+      - proxynet
+
   deployer:
     profiles: [deployer]
-    image: ${DEPLOYER_IMAGE_EFFECTIVE:-${DEPLOYER_IMAGE:-docker.io/commercedeployer/deployer:latest}}
+    image: ${DEPLOYER_IMAGE_EFFECTIVE:-${DEPLOYER_IMAGE:-commercedeployer/deployer:latest}}
     container_name: deployer
     restart: unless-stopped
     user: root
@@ -273,6 +297,7 @@ services:
       ADMIN_USER: ${DEPLOYER_ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${DEPLOYER_ADMIN_PASSWORD:-}
       SESSION_SECRET: ${DEPLOYER_SESSION_SECRET:-}
+      DEPLOYER_AUTH_MODE: ${DEPLOYER_AUTH_MODE:-dual}
       PORT: 3000
       DEPLOY_BASE_PATH: ${DEPLOY_BASE_PATH:-/opt/deploy-data}
       DEFAULT_PULL_POLICY: ${DEPLOYER_DEFAULT_PULL_POLICY:-always}

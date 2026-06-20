@@ -216,6 +216,7 @@ apply_stack_admin_defaults() {
   : "${STACK_ADMIN_USER:=admin}"
   : "${STACK_ADMIN_EMAIL:=${ACME_EMAIL:-admin@${DOMAIN:-example.com}}}"
 
+  : "${REGISTRY_AUTH_TOKEN_ISSUER:=setup-server-registry}"
   : "${REGISTRY_USER:=$STACK_ADMIN_USER}"
   : "${SEMAPHORE_ADMIN:=$STACK_ADMIN_USER}"
   : "${SEMAPHORE_ADMIN_NAME:=$STACK_ADMIN_USER}"
@@ -273,10 +274,54 @@ ensure_dirs() {
   mkdir -p "$STACK_ROOT/traefik" "$STACK_ROOT/certs" "$STACK_ROOT/config/traefik" \
     "$STACK_ROOT/config/docker_auth" "$STACK_ROOT/config/docker" \
     "$STACK_ROOT/config/pgadmin" \
-    "$STACK_ROOT/filebrowser/database" "$STACK_ROOT/filebrowser/config"
+    "$STACK_ROOT/filebrowser/database" "$STACK_ROOT/filebrowser/config" \
+    "$STACK_ROOT/nginx/public"
   ensure_filebrowser_root_dir
   RUN mkdir -p "${DEPLOY_BASE_PATH:-/opt/deploy-data}"
   chmod 700 "$STACK_ROOT/certs" 2>/dev/null || true
+}
+
+resolve_nginx_host() {
+  if [[ -n "${NGINX_HOST:-}" ]]; then
+    printf '%s\n' "$NGINX_HOST"
+  else
+    printf '%s\n' "${DOMAIN:-}"
+  fi
+}
+
+resolve_nginx_public_path() {
+  printf '%s/nginx/public\n' "$STACK_ROOT"
+}
+
+initialize_nginx_public_dir() {
+  [[ "${ENABLE_NGINX:-0}" == "1" ]] || return 0
+
+  local public_dir seed_dir
+  public_dir="$(resolve_nginx_public_path)"
+  seed_dir="$SCRIPT_DIR/public"
+
+  mkdir -p "$public_dir"
+  if find "$public_dir" -mindepth 1 -print -quit | grep -q .; then
+    chmod -R u=rwX,go=rX "$public_dir"
+    info "NGINX public dir already has files, keeping existing site: $public_dir"
+    return 0
+  fi
+
+  if [[ -d "$seed_dir" ]]; then
+    cp -a "$seed_dir/." "$public_dir/"
+    chmod -R u=rwX,go=rX "$public_dir"
+    info "Initialized NGINX public dir with example files from public/: $public_dir"
+  else
+    cat >"$public_dir/index.html" <<'HTML'
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>setup-server-stack</title></head>
+<body><h1>setup-server-stack static site is running</h1></body>
+</html>
+HTML
+    chmod -R u=rwX,go=rX "$public_dir"
+    warn "Missing seed public/index.html; wrote fallback NGINX index.html to $public_dir"
+  fi
 }
 
 resolve_filebrowser_root_path() {
@@ -332,6 +377,23 @@ semaphore_access_key_encryption_valid() {
     16|24|32) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+resolve_deployer_auth_mode() {
+  local raw="${DEPLOYER_AUTH_MODE:-dual}"
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    dual|both|ui+api|ui_api|ui-api) echo "dual" ;;
+    api|api-only|api_only) echo "api" ;;
+    ui|session|ui-only|ui_only) echo "ui" ;;
+    *) return 1 ;;
+  esac
+}
+
+deployer_auth_mode_uses_api_key() {
+  local mode
+  mode="$(resolve_deployer_auth_mode)" || return 1
+  [[ "$mode" == "dual" || "$mode" == "api" ]]
 }
 
 ensure_htpasswd() {
@@ -399,6 +461,30 @@ write_doku_htpasswd() {
   grep -v '^DOKU_DASHBOARD_PASSWORD=' "$sec" >"${sec}.tmp" 2>/dev/null || true
   mv "${sec}.tmp" "$sec" 2>/dev/null || true
   echo "DOKU_DASHBOARD_PASSWORD=$dp" >>"$sec"
+}
+
+compose_project_name() {
+  basename "$SCRIPT_DIR"
+}
+
+existing_compose_state_detected() {
+  command -v docker >/dev/null 2>&1 || return 1
+
+  local project
+  project="$(compose_project_name)"
+
+  docker ps -aq --filter "label=com.docker.compose.project=${project}" 2>/dev/null | grep -q . && return 0
+  docker volume ls -q --filter "label=com.docker.compose.project=${project}" 2>/dev/null | grep -q . && return 0
+
+  return 1
+}
+
+guard_existing_stack_requires_secrets() {
+  [[ "$FORCE_SECRETS" -eq 1 ]] && return 0
+  [[ -f "$SCRIPT_DIR/.secrets" ]] && return 0
+  existing_compose_state_detected || return 0
+
+  die "Existing Docker Compose state was detected for project $(compose_project_name), but $SCRIPT_DIR/.secrets is missing. Refusing to generate new secrets over an existing stack. Restore .secrets from your local secrets/<timestamp> backup, or fully reset the stack data before reinstalling."
 }
 
 write_stack_secrets() {
@@ -666,6 +752,25 @@ write_stack_secrets() {
         changed=1
       fi
     fi
+    if deployer_auth_mode_uses_api_key; then
+      if [[ -z "${DEPLOYER_API_KEY:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+        if ! grep -q '^DEPLOYER_API_KEY=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+          local dapi
+          dapi=$(rand_hex 32)
+          grep -v '^DEPLOYER_API_KEY=' "$sec" >"${sec}.tmp" 2>/dev/null || true
+          mv "${sec}.tmp" "$sec" 2>/dev/null || true
+          echo "DEPLOYER_API_KEY=$dapi" >>"$sec"
+          changed=1
+        fi
+      fi
+    else
+      DEPLOYER_API_KEY=""
+      if grep -q '^DEPLOYER_API_KEY=' "$sec" 2>/dev/null; then
+        grep -v '^DEPLOYER_API_KEY=' "$sec" >"${sec}.tmp" 2>/dev/null || true
+        mv "${sec}.tmp" "$sec" 2>/dev/null || true
+        changed=1
+      fi
+    fi
   fi
 
   if [[ "$changed" -eq 1 ]]; then
@@ -853,6 +958,8 @@ write_env_for_compose() {
   : "${DUPLICATI_IMAGE:=linuxserver/duplicati:latest}"
   : "${UPTIME_KUMA_IMAGE:=louislam/uptime-kuma:1}"
   : "${FILEBROWSER_IMAGE:=filebrowser/filebrowser:v2-s6}"
+  : "${NGINX_IMAGE:=nginx:1.27-alpine}"
+  : "${NGINX_HOST:=${DOMAIN:-}}"
   : "${MONGO_IMAGE:=mongo:7}"
   : "${POSTGRES_IMAGE:=postgres:16-alpine}"
   : "${MARIADB_IMAGE:=mariadb:11}"
@@ -863,6 +970,7 @@ write_env_for_compose() {
   : "${DEPLOYER_IMAGE_EFFECTIVE:=${DEPLOYER_IMAGE:-}}"
   : "${DEPLOYER_IMAGE:=}"
   : "${DEPLOYER_NODE_ENV:=production}"
+  : "${DEPLOYER_AUTH_MODE:=dual}"
   : "${DEPLOY_BASE_PATH:=/opt/deploy-data}"
   : "${DEPLOYER_DEFAULT_PULL_POLICY:=always}"
   : "${DEPLOYER_PULL_MAX_ATTEMPTS:=3}"
@@ -889,7 +997,7 @@ write_env_for_compose() {
   export COMPOSE_PROFILES
 
   local env_out="$STACK_ROOT/.env.stack"
-  local rp sp sk dwp dsek mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr fbp dap dss dapi drp drcj rpp
+  local rp sp sk dwp dsek mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr fbp nginx_host deployer_auth_mode dap dss dapi drp drcj rpp
   rp="$(quote_for_env_stack "${REGISTRY_PASSWORD:-}")"
   rpp="$(quote_for_env_stack "${REGISTRY_PULL_PASSWORD:-}")"
   sp="$(quote_for_env_stack "${SEMAPHORE_ADMIN_PASSWORD:-}")"
@@ -908,6 +1016,8 @@ write_env_for_compose() {
   resolve_filebrowser_root_path
   fbr="$(quote_for_env_stack "${FILEBROWSER_ROOT_PATH}")"
   fbp="$(quote_for_env_stack "${FILEBROWSER_PASSWORD:-}")"
+  nginx_host="$(quote_for_env_stack "$(resolve_nginx_host)")"
+  deployer_auth_mode="$(resolve_deployer_auth_mode)"
   dap="$(quote_for_env_stack "${DEPLOYER_ADMIN_PASSWORD:-}")"
   dss="$(quote_for_env_stack "${DEPLOYER_SESSION_SECRET:-}")"
   dapi="$(quote_for_env_stack "${DEPLOYER_API_KEY:-}")"
@@ -939,6 +1049,8 @@ write_env_for_compose() {
     echo "DUPLICATI_IMAGE=$DUPLICATI_IMAGE"
     echo "UPTIME_KUMA_IMAGE=$UPTIME_KUMA_IMAGE"
     echo "FILEBROWSER_IMAGE=$FILEBROWSER_IMAGE"
+    echo "NGINX_IMAGE=$NGINX_IMAGE"
+    echo "NGINX_HOST=\"$nginx_host\""
     echo "FILEBROWSER_ROOT_PATH=\"$fbr\""
     echo "FILEBROWSER_USER=${FILEBROWSER_USER:-${STACK_ADMIN_USER:-admin}}"
     echo "FILEBROWSER_PASSWORD=\"$fbp\""
@@ -959,11 +1071,13 @@ write_env_for_compose() {
     echo "ENABLE_DUPLICATI=${ENABLE_DUPLICATI:-0}"
     echo "ENABLE_UPTIME_KUMA=${ENABLE_UPTIME_KUMA:-0}"
     echo "ENABLE_FILEBROWSER=${ENABLE_FILEBROWSER:-0}"
+    echo "ENABLE_NGINX=${ENABLE_NGINX:-0}"
     echo "ENABLE_REGISTRY=${ENABLE_REGISTRY:-0}"
     echo "ENABLE_DOCKER_AUTH=${ENABLE_DOCKER_AUTH:-${ENABLE_REGISTRY:-0}}"
     echo "DEPLOYER_IMAGE_EFFECTIVE=$DEPLOYER_IMAGE_EFFECTIVE"
     echo "DEPLOYER_IMAGE=$DEPLOYER_IMAGE"
     echo "DEPLOYER_NODE_ENV=$DEPLOYER_NODE_ENV"
+    echo "DEPLOYER_AUTH_MODE=$deployer_auth_mode"
     echo "DEPLOYER_ADMIN_USER=$DEPLOYER_ADMIN_USER"
     echo "DEPLOYER_ADMIN_PASSWORD=\"$dap\""
     echo "DEPLOYER_SESSION_SECRET=\"$dss\""
@@ -1159,7 +1273,7 @@ push_registry_seed_images() {
 prepare_deployer_image() {
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] || return 0
   local deployer_image="${DEPLOYER_IMAGE:-}"
-  [ -n "$deployer_image" ] || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image from Docker Hub or GHCR). Build via https://github.com/commercedeployer/deployer CI, then set e.g. docker.io/commercedeployer/deployer:latest"
+  [ -n "$deployer_image" ] || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image from Docker Hub or GHCR). Build via https://github.com/commercedeployer/deployer CI, then set e.g. commercedeployer/deployer:latest"
 
   step "Deployer: pull image $deployer_image"
   local retries="${REGISTRY_OPERATION_RETRIES:-3}"
@@ -1210,12 +1324,103 @@ pre_pull_compose_images() {
   done
 }
 
+provided_cert_pair_for_host() {
+  local host="$1"
+  local dir="$STACK_ROOT/certs"
+  local cert key
+
+  cert="$dir/${host}/fullchain.pem"; key="$dir/${host}/privkey.pem"
+  [[ -f "$cert" && -f "$key" ]] && { printf '%s|%s\n' "$cert" "$key"; return 0; }
+
+  return 1
+}
+
+provided_cert_container_path() {
+  local path="$1"
+  local dir="$STACK_ROOT/certs"
+  local rel
+
+  case "$path" in
+    "$dir"/*)
+      rel="${path#"$dir"/}"
+      printf '/certs/%s\n' "$rel"
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
+render_traefik_provided_certs_config() {
+  local out="$STACK_ROOT/config/traefik/provided-certificates.yml"
+  local mode="${TRAEFIK_CERT_MODE:-auto}"
+  local service host pair cert key ccert ckey
+  local written=0
+  local seen="|"
+  local body
+
+  mkdir -p "$STACK_ROOT/config/traefik" "$STACK_ROOT/certs"
+  body=$(mktemp)
+
+  if [[ "$mode" == "auto" || "$mode" == "provided" ]]; then
+    while IFS='|' read -r service host; do
+      [ -n "$service" ] || continue
+      if pair=$(provided_cert_pair_for_host "$host"); then
+        cert="${pair%%|*}"
+        key="${pair#*|}"
+        if [[ "$seen" == *"|$cert|$key|"* ]]; then
+          continue
+        fi
+        seen="${seen}${cert}|${key}|"
+        ccert=$(provided_cert_container_path "$cert")
+        ckey=$(provided_cert_container_path "$key")
+        {
+          echo "    - certFile: \"$ccert\""
+          echo "      keyFile: \"$ckey\""
+        } >>"$body"
+        written=1
+      fi
+    done < <(https_service_hosts)
+  fi
+
+  {
+    echo "# Generated by setup-server-stack.sh - custom TLS certificates for Traefik."
+    echo "tls:"
+    if [[ "$written" == "1" ]]; then
+      echo "  certificates:"
+      cat "$body"
+    else
+      echo "  certificates: []"
+    fi
+  } >"$out"
+  rm -f "$body"
+  chmod 600 "$out"
+
+  if [[ "$mode" == "auto" || "$mode" == "provided" ]]; then
+    info "Traefik custom certificates: $out ($STACK_ROOT/certs/<host>)."
+  fi
+}
+
 configure_traefik_cert_mode() {
-  local mode="${TRAEFIK_CERT_MODE:-letsencrypt}"
+  local mode="${TRAEFIK_CERT_MODE:-auto}"
   mode=$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')
   local default_storage
 
   case "$mode" in
+    auto)
+      TRAEFIK_CERT_MODE="auto"
+      TRAEFIK_CERT_RESOLVER="letsencrypt"
+      TRAEFIK_ACME_EMAIL="${ACME_EMAIL:-}"
+      : "${TRAEFIK_ACME_CA_SERVER:=https://acme-v02.api.letsencrypt.org/directory}"
+      default_storage="$STACK_ROOT/traefik/acme.json"
+      ;;
+    provided)
+      TRAEFIK_CERT_MODE="provided"
+      TRAEFIK_CERT_RESOLVER=""
+      TRAEFIK_ACME_EMAIL="${ACME_EMAIL:-provided@example.invalid}"
+      : "${TRAEFIK_ACME_CA_SERVER:=https://acme-v02.api.letsencrypt.org/directory}"
+      default_storage="$STACK_ROOT/traefik/acme-provided.json"
+      ;;
     letsencrypt)
       TRAEFIK_CERT_MODE="letsencrypt"
       TRAEFIK_CERT_RESOLVER="letsencrypt"
@@ -1238,11 +1443,12 @@ configure_traefik_cert_mode() {
       default_storage="$STACK_ROOT/traefik/acme-selfsigned.json"
       ;;
     *)
-      die "TRAEFIK_CERT_MODE must be one of: letsencrypt, staging, selfsigned."
+      die "TRAEFIK_CERT_MODE must be one of: auto, provided, letsencrypt, staging, selfsigned."
       ;;
   esac
 
   : "${TRAEFIK_ACME_STORAGE_FILE:=$default_storage}"
+  mkdir -p "$STACK_ROOT/certs"
   TRAEFIK_TLS_CHECK_WAIT_SECONDS="${TRAEFIK_TLS_CHECK_WAIT_SECONDS:-20}"
   [[ "$TRAEFIK_TLS_CHECK_WAIT_SECONDS" =~ ^[0-9]+$ ]] || die "TRAEFIK_TLS_CHECK_WAIT_SECONDS must be a number >= 0"
 
@@ -1272,7 +1478,7 @@ validate_tls_domain_config() {
     die "DOMAIN looks invalid ($domain) — expected an FQDN like stack.company.com."
   fi
 
-  if [[ "$TRAEFIK_CERT_MODE" == "selfsigned" ]]; then
+  if [[ "$TRAEFIK_CERT_MODE" == "selfsigned" || "$TRAEFIK_CERT_MODE" == "provided" ]]; then
     return 0
   fi
 
@@ -1299,6 +1505,7 @@ validate_traefik_required() {
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && need+=(ENABLE_DUPLICATI)
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && need+=(ENABLE_UPTIME_KUMA)
   [[ "${ENABLE_FILEBROWSER:-0}" == "1" ]] && need+=(ENABLE_FILEBROWSER)
+  [[ "${ENABLE_NGINX:-0}" == "1" ]] && need+=(ENABLE_NGINX)
   [[ "${ENABLE_REGISTRY:-0}" == "1" ]] && need+=(ENABLE_REGISTRY)
   [[ "${ENABLE_DOCKER_AUTH:-${ENABLE_REGISTRY:-0}}" == "1" ]] && need+=(ENABLE_DOCKER_AUTH)
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] && need+=(ENABLE_DEPLOYER)
@@ -1320,6 +1527,7 @@ validate_enable_flags() {
   ENABLE_DUPLICATI="${ENABLE_DUPLICATI:-0}"
   ENABLE_UPTIME_KUMA="${ENABLE_UPTIME_KUMA:-0}"
   ENABLE_FILEBROWSER="${ENABLE_FILEBROWSER:-0}"
+  ENABLE_NGINX="${ENABLE_NGINX:-0}"
   ENABLE_REGISTRY="${ENABLE_REGISTRY:-0}"
   ENABLE_DOCKER_AUTH="${ENABLE_DOCKER_AUTH:-${ENABLE_REGISTRY}}"
   ENABLE_DEPLOYER="${ENABLE_DEPLOYER:-0}"
@@ -1372,8 +1580,19 @@ validate_enable_flags() {
       || [[ "${ENABLE_MYSQL:-0}" == "1" ]] \
       || die "ENABLE_ADMINER=1 requires ENABLE_MONGO=1 and/or ENABLE_POSTGRES=1 and/or ENABLE_MARIADB=1 and/or ENABLE_MYSQL=1"
   fi
+  if [[ "${ENABLE_NGINX:-0}" == "1" ]]; then
+    local nginx_host
+    nginx_host="$(resolve_nginx_host)"
+    [[ "$nginx_host" != http://* && "$nginx_host" != https://* ]] || die "NGINX_HOST must be a host only, without http:// or https://"
+    [[ "$nginx_host" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]] \
+      || die "NGINX_HOST looks invalid ($nginx_host) — expected an FQDN like company.com or www.company.com."
+  fi
   [[ "${ENABLE_DEPLOYER:-0}" != "1" ]] || [ -n "${DEPLOYER_IMAGE:-}" ] \
-    || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image URL, e.g. docker.io/commercedeployer/deployer:latest)."
+    || die "ENABLE_DEPLOYER=1 requires DEPLOYER_IMAGE (pre-built image URL, e.g. commercedeployer/deployer:latest)."
+  if [[ "${ENABLE_DEPLOYER:-0}" == "1" ]]; then
+    resolve_deployer_auth_mode >/dev/null \
+      || die "DEPLOYER_AUTH_MODE must be one of: dual, api, ui."
+  fi
   if [[ -n "${REGISTRY_SEED_IMAGES:-}" ]] && [[ "${ENABLE_REGISTRY:-0}" != "1" ]]; then
     warn "REGISTRY_SEED_IMAGES set but ENABLE_REGISTRY=0 — seed image push skipped."
   fi
@@ -1392,6 +1611,7 @@ compose_profiles() {
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && p="${p},duplicati"
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && p="${p},kuma"
   [[ "${ENABLE_FILEBROWSER:-0}" == "1" ]] && p="${p},filebrowser"
+  [[ "${ENABLE_NGINX:-0}" == "1" ]] && p="${p},nginx"
   [[ "${ENABLE_REGISTRY:-0}" == "1" ]] && p="${p},registry"
   [[ "${ENABLE_DOCKER_AUTH:-${ENABLE_REGISTRY:-0}}" == "1" ]] && p="${p},registry-auth"
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] && p="${p},deployer"
@@ -1584,10 +1804,12 @@ https_service_hosts() {
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && echo "Duplicati|duplicati.${d}"
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && echo "Uptime Kuma|kuma.${d}"
   [[ "${ENABLE_FILEBROWSER:-0}" == "1" ]] && echo "Filebrowser|filebrowser.${d}"
+  [[ "${ENABLE_NGINX:-0}" == "1" ]] && echo "NGINX static site|$(resolve_nginx_host)"
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] && echo "Deployer|deployer.${d}"
   [[ "${ENABLE_MONGO_EXPRESS:-0}" == "1" ]] && echo "mongo-express|mongo-express.${d}"
   [[ "${ENABLE_PGADMIN:-0}" == "1" ]] && echo "pgAdmin|pgadmin.${d}"
   [[ "${ENABLE_ADMINER:-0}" == "1" ]] && echo "Adminer|adminer.${d}"
+  return 0
 }
 
 acme_has_certificate_for_host() {
@@ -1616,18 +1838,117 @@ wait_acme_certificate_for_host() {
 
 print_recent_traefik_acme_logs() {
   local host="$1"
-  local lines
+  local lines retry_after
 
   lines=$(docker logs --since 15m traefik 2>&1 \
-    | grep -Ei "($host|acme|letsencrypt|certificate|challenge|rate|limit|error)" \
+    | grep -F "$host" \
     | tail -n 10 || true)
 
+  if [ -z "$lines" ]; then
+    lines=$(docker logs --since 15m traefik 2>&1 \
+      | grep -Ei "(acme|letsencrypt|certificate|challenge|rate|limit|error)" \
+      | tail -n 5 || true)
+  fi
+
   if [ -n "$lines" ]; then
+    if printf '%s\n' "$lines" | grep -qi 'rateLimited'; then
+      retry_after=$(printf '%s\n' "$lines" \
+        | sed -nE 's/.*retry after ([0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}( UTC|Z)).*/\1/p' \
+        | tail -n 1)
+      if [ -n "$retry_after" ]; then
+        warn "TLS RATE LIMIT: ${host} is blocked by Let's Encrypt until about ${retry_after}."
+      else
+        warn "TLS RATE LIMIT: ${host} is currently blocked by Let's Encrypt."
+      fi
+      echo "    After that time, retry with: docker compose --env-file .env.stack -f docker-compose.yml restart traefik"
+    fi
     echo "    Recent Traefik ACME logs:"
     printf '%s\n' "$lines" | sed 's/^/      /'
   else
     echo "    Recent Traefik ACME logs: no matching lines in the last 15 minutes."
   fi
+}
+
+export_production_acme_certificates() {
+  [[ "${ENABLE_TRAEFIK:-0}" == "1" ]] || return 0
+  [[ "${TRAEFIK_CERT_MODE:-auto}" == "auto" || "${TRAEFIK_CERT_MODE:-auto}" == "letsencrypt" ]] || return 0
+  [[ "${TRAEFIK_ACME_CA_SERVER:-}" == "https://acme-v02.api.letsencrypt.org/directory" ]] || return 0
+
+  local acme_file="${TRAEFIK_ACME_STORAGE_FILE:-$STACK_ROOT/traefik/acme.json}"
+  local certs_dir="$STACK_ROOT/certs"
+  [[ -s "$acme_file" ]] || return 0
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "Cannot export Let's Encrypt certificates to $certs_dir: python3 is not installed."
+    return 0
+  fi
+
+  local hosts_file output status host message
+  hosts_file=$(mktemp)
+  https_service_hosts | awk -F'|' 'NF >= 2 && $2 != "" { print $2 }' | sort -u >"$hosts_file"
+
+  output=$(ACME_FILE="$acme_file" CERTS_DIR="$certs_dir" HOSTS_FILE="$hosts_file" python3 <<'PY'
+import base64
+import json
+import os
+import pathlib
+import sys
+
+acme_file = pathlib.Path(os.environ["ACME_FILE"])
+certs_dir = pathlib.Path(os.environ["CERTS_DIR"])
+hosts_file = pathlib.Path(os.environ["HOSTS_FILE"])
+hosts = [line.strip() for line in hosts_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+try:
+    data = json.loads(acme_file.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"WARN|-|cannot parse {acme_file}: {exc}")
+    sys.exit(0)
+
+certs_by_host = {}
+for resolver in data.values():
+    items = resolver.get("Certificates", []) if isinstance(resolver, dict) else []
+    for item in items:
+        domain = item.get("domain") or {}
+        names = [domain.get("main"), *(domain.get("sans") or [])]
+        for name in names:
+            if name:
+                certs_by_host[name] = item
+
+for host in hosts:
+    item = certs_by_host.get(host)
+    if not item:
+        continue
+    target_dir = certs_dir / host
+    cert_file = target_dir / "fullchain.pem"
+    key_file = target_dir / "privkey.pem"
+    if cert_file.exists() or key_file.exists():
+        print(f"SKIP|{host}|existing files kept")
+        continue
+    try:
+        cert = base64.b64decode(item["certificate"])
+        key = base64.b64decode(item["key"])
+        target_dir.mkdir(parents=True, exist_ok=True)
+        cert_file.write_bytes(cert)
+        key_file.write_bytes(key)
+        os.chmod(target_dir, 0o700)
+        os.chmod(cert_file, 0o644)
+        os.chmod(key_file, 0o600)
+        print(f"EXPORT|{host}|{cert_file}")
+    except Exception as exc:
+        print(f"WARN|{host}|{exc}")
+PY
+)
+  rm -f "$hosts_file"
+
+  while IFS='|' read -r status host message; do
+    [ -n "$status" ] || continue
+    case "$status" in
+      EXPORT) info "TLS export: saved production Let's Encrypt certificate for $host to $message." ;;
+      SKIP) info "TLS export: $host skipped, $message." ;;
+      WARN) warn "TLS export: $host: $message" ;;
+    esac
+  done <<<"$output"
 }
 
 diagnose_traefik_tls() {
@@ -1640,6 +1961,11 @@ diagnose_traefik_tls() {
   step "Traefik TLS: certificate diagnostics"
 
   case "$mode" in
+    auto)
+      ;;
+    provided)
+      warn "TRAEFIK_CERT_MODE=provided: Let's Encrypt is disabled. Only custom certificates from $STACK_ROOT/certs/<host> will be used."
+      ;;
     selfsigned)
       warn "TRAEFIK_CERT_MODE=selfsigned: Let's Encrypt is disabled. HTTPS is available, but browsers will show an untrusted certificate warning."
       while IFS='|' read -r service host; do
@@ -1662,7 +1988,9 @@ diagnose_traefik_tls() {
     [ -n "$service" ] || continue
     echo "  TLS check: ${service} -> https://${host}"
 
-    if wait_acme_certificate_for_host "$host"; then
+    if [[ "$mode" == "auto" || "$mode" == "provided" ]] && provided_cert_pair_for_host "$host" >/dev/null 2>&1; then
+      info "TLS OK: ${service}: custom certificate is configured for ${host}."
+    elif wait_acme_certificate_for_host "$host"; then
       if [[ "$mode" == "staging" ]]; then
         warn "TLS TEST: ${service}: ACME staging certificate is present for ${host}; browser warning is expected."
       else
@@ -1670,9 +1998,14 @@ diagnose_traefik_tls() {
       fi
     else
       missing=$((missing + 1))
-      warn "TLS WARN: ${service}: no ACME certificate for ${host} in ${acme_file}. Browser warning is expected."
-      echo "    Check DNS A/AAAA records, open ports 80/443, Let's Encrypt rate limits, and Traefik logs."
-      print_recent_traefik_acme_logs "$host"
+      if [[ "$mode" == "provided" ]]; then
+        warn "TLS WARN: ${service}: no custom certificate for ${host}. Browser warning is expected."
+        echo "    Add $STACK_ROOT/certs/${host}/fullchain.pem and $STACK_ROOT/certs/${host}/privkey.pem."
+      else
+        warn "TLS WARN: ${service}: no ACME certificate for ${host} in ${acme_file}. Browser warning is expected."
+        echo "    Check DNS A/AAAA records, open ports 80/443, Let's Encrypt rate limits, and Traefik logs."
+        print_recent_traefik_acme_logs "$host"
+      fi
     fi
   done < <(https_service_hosts)
 
@@ -1723,6 +2056,7 @@ print_urls() {
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && echo "  Duplicati:   https://duplicati.${d}"
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && echo "  Kuma:        https://kuma.${d}"
   [[ "${ENABLE_FILEBROWSER:-0}" == "1" ]] && echo "  Filebrowser: https://filebrowser.${d}  (rw: ${FILEBROWSER_ROOT_PATH:-$STACK_ROOT/filebrowser/files}; login ${FILEBROWSER_USER:-${STACK_ADMIN_USER:-admin}}, password in FILEBROWSER_PASSWORD)"
+  [[ "${ENABLE_NGINX:-0}" == "1" ]] && echo "  NGINX site:  https://$(resolve_nginx_host)  (files: $(resolve_nginx_public_path))"
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] && echo "  Deployer:    https://deployer.${d}"
   [[ "${ENABLE_MONGO_EXPRESS:-0}" == "1" ]] && echo "  mongo-express: https://mongo-express.${d}"
   [[ "${ENABLE_PGADMIN:-0}" == "1" ]] && echo "  pgAdmin:       https://pgadmin.${d}  (Postgres server pre-registered; pgAdmin login — PGADMIN_EMAIL / PGADMIN_PASSWORD)"
@@ -1736,6 +2070,7 @@ print_urls() {
   echo "Filebrowser: user ${FILEBROWSER_USER:-${STACK_ADMIN_USER:-admin}}, password in FILEBROWSER_PASSWORD in .secrets."
   registry_enabled && echo "docker login (push):  docker login registry.${d}  # user ${REGISTRY_USER}"
   registry_enabled && echo "docker login (pull):  docker login registry.${d}  # user ${REGISTRY_PULL_USER:-registrypull}"
+  return 0
 }
 
 main() {
@@ -1774,6 +2109,7 @@ main() {
   touch_acme
   ensure_network
 
+  guard_existing_stack_requires_secrets
   write_stack_secrets
   if registry_enabled; then
     gen_registry_certs
@@ -1784,7 +2120,9 @@ main() {
   render_pgadmin_config
   prepare_deployer_image
   push_registry_seed_images
+  initialize_nginx_public_dir
   write_env_for_compose
+  render_traefik_provided_certs_config
 
   local compose_args=()
   local _p
@@ -1806,6 +2144,7 @@ main() {
 
   configure_filebrowser_credentials
   diagnose_traefik_tls
+  export_production_acme_certificates
   print_urls
   if [[ "${SKIP_SSH_HARDENING:-0}" != "1" ]]; then
     apply_ssh_hardening
