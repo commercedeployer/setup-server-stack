@@ -61,9 +61,12 @@ FIXTURE_DIR="$ROOT/tests/fixtures"
 for fixture in default lean db deployer; do
   f="$FIXTURE_DIR/${fixture}.env.stack"
   [[ -f "$f" ]] || { echo "Missing fixture: $f" >&2; exit 1; }
-  load_fixture "$f"
-  echo "  fixture: ${fixture}.env.stack (profiles: ${COMPOSE_PROFILES:-})"
-  docker compose -f docker-compose.yml config --quiet
+  # Subshell keeps each fixture's exported vars from leaking into later steps.
+  (
+    load_fixture "$f"
+    echo "  fixture: ${fixture}.env.stack (profiles: ${COMPOSE_PROFILES:-})"
+    docker compose -f docker-compose.yml config --quiet
+  )
 done
 
 step "validate-lib.sh"

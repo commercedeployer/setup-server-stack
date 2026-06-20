@@ -5,6 +5,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$ROOT/lib/setup-server-stack-lib.sh"
 
+# Tests assume a clean environment. A caller (e.g. run-ci.sh) may have sourced
+# fixtures earlier, so clear stack vars that individual cases rely on being
+# unset or self-controlled; otherwise inherited values would skew results.
+unset TRAEFIK_CERT_MODE TRAEFIK_CERT_RESOLVER TRAEFIK_ACME_CA_SERVER \
+  TRAEFIK_ACME_STORAGE_FILE TRAEFIK_ACME_EMAIL TRAEFIK_TLS_CHECK_WAIT_SECONDS \
+  DEPLOYER_API_KEY DEPLOYER_AUTH_MODE 2>/dev/null || true
+
 run_lib() {
   export VERSION=ci-test
   export SCRIPT_DIR="$ROOT"
