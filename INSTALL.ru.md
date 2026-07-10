@@ -18,8 +18,9 @@
 | Обновление образов по расписанию | **Watchtower** |
 | CI/задачи | **Semaphore** |
 | Обзор занятости диска Docker | **Doku** |
-| Бэкапы | **Duplicati** |
+| Бэкапы | **Duplicati** (UI) и опционально **gocron** (cron + rsync/restic/rclone) |
 | Мониторинг доступности сайтов | **Uptime Kuma** |
+| Метрики сервера | **Beszel** (локальный агент авто-регистрируется) |
 | Файловый менеджер | **Filebrowser** |
 | Опционально приложение деплоя | **Deployer** (готовый образ из `DEPLOYER_IMAGE`) |
 | Опционально БД и веб-морды | Mongo, Postgres, MariaDB, MySQL, mongo-express, pgAdmin, Adminer |
@@ -286,7 +287,9 @@ docker compose -f docker-compose.yml --env-file .env.stack ps
 | Semaphore | `https://semaphore.company.ru` | **`STACK_ADMIN_USER`** и пароль **`SEMAPHORE_ADMIN_PASSWORD`** из `.secrets` |
 | Doku | `https://doku.company.ru` | **Basic Auth в Traefik:** логин **`STACK_ADMIN_USER`**, пароль **`DOKU_DASHBOARD_PASSWORD`** в `.secrets`; файл `config/traefik/htpasswd-doku` создаёт `setup-server-stack.sh` |
 | Duplicati | `https://duplicati.company.ru` | Пароль **`DUPLICATI_WEBSERVICE_PASSWORD`** из secrets; задания бэкапа настраиваются в UI (§8) |
+| gocron | `https://gocron.company.ru` | **Без встроенного логина** — только HTTPS через Traefik; задания в UI или `config.yaml` (§8) |
 | Uptime Kuma | `https://kuma.company.ru` | **Первый заход** — создаёте админа в UI; marker в secrets: `UPTIME_KUMA_ADMIN_PASSWORD=SET_ON_FIRST_LOGIN` |
+| Beszel | `https://beszel.company.ru` | Логин **`STACK_ADMIN_EMAIL`**, пароль **`BESZEL_USER_PASSWORD`** в `.secrets`; этот сервер уже добавлен в мониторинг автоматически (без ручного «Add System») |
 | Filebrowser | `https://filebrowser.company.ru` | Логин **`STACK_ADMIN_USER`**, пароль **`FILEBROWSER_PASSWORD`** в `.secrets`; каталог на хосте — `FILEBROWSER_ROOT_PATH` (пусто = `$STACK_ROOT/filebrowser/files`) |
 | Deployer (если включён) | `https://deployer.company.ru` | По умолчанию **`DEPLOYER_AUTH_MODE=dual`**: UI — **`STACK_ADMIN_USER`** / **`DEPLOYER_ADMIN_PASSWORD`**; API — **`DEPLOYER_API_KEY`** |
 
@@ -427,6 +430,10 @@ DEPLOYER_IMAGE=commercedeployer/deployer:latest
 
 Политика pull внутри Deployer (для образов приложений): `DEPLOYER_DEFAULT_PULL_POLICY=always` | `ifNotPresent`, попытки — `DEPLOYER_PULL_MAX_ATTEMPTS`.
 
+**Утилиты provision** (внутри **контейнера** Deployer, не на Ubuntu): `DEPLOYER_SOFTWARE` в `.env` — ключи через запятую, по умолчанию `bash,curl`. `node` всегда есть. Для Postgres tenant (`umami-pg`) добавьте `psql`, например `bash,curl,psql`. Полный список — `.env.example`, блок Deployer.
+
+**MCP / Cursor:** ключи выпускаются в UI Deployer (**MCP / AI**). `DEPLOYER_PUBLIC_BASE_URL` в compose по умолчанию `https://deployer.${DOMAIN}` (переопределите в `.env` при необходимости). Hash ключей — `DEPLOYER_SESSION_SECRET`; отдельного pepper и флага «включить MCP» нет. Опционально **`DEPLOYER_MCP_TOOLS_DENY`** — имена MCP-tools через запятую, которые не попадут агенту.
+
 ### Duplicati (бэкапы)
 
 Стек поднимает **веб-UI Duplicati** и хранит его настройки в `${STACK_ROOT}/duplicati`. **Задания бэкапа** установщик не создаёт:
@@ -438,6 +445,18 @@ DEPLOYER_IMAGE=commercedeployer/deployer:latest
 После установки откройте `https://duplicati.${DOMAIN}`, войдите с паролем `DUPLICATI_WEBSERVICE_PASSWORD` из secrets и создайте задание в UI.
 
 По умолчанию Duplicati видит только свой `/config` внутри контейнера. Так как все данные стека лежат под `${STACK_ROOT}`, достаточно одного **read-only** bind mount `${STACK_ROOT}` в сервис `duplicati` в `docker-compose.yml` (пример в комментарии к сервису), затем `docker compose ... up -d`. Пути должны быть читаемы для `DUP_PUID` / `DUP_PGID` (по умолчанию `1000`).
+
+### gocron (cron + бэкап-утилиты)
+
+Опциональный сервис: **`ENABLE_GOCRON=1`**. Планировщик с веб-UI ([flohoss/gocron](https://github.com/flohoss/gocron)): задания — shell-команды по cron, удобно для **rsync**, **restic**, **rclone** и др.
+
+Установщик создаёт `${GOCRON_DATA_PATH}/config.yaml` (по умолчанию `${STACK_ROOT}/gocron/config.yaml`):
+
+- **`GOCRON_SOFTWARE`** — список инструментов через запятую или `;` (пусто = `rsync`). Допустимые имена: `apprise`, `borgbackup`, `docker`, `git`, `podman`, `rclone`, `rdiff-backup`, `restic`, `rsync`, `logrotate`, `sqlite3`, `kopia`. Контейнер доустанавливает их при старте. При повторном запуске обновляется только `software`, `jobs:` сохраняются (сброс — удалить `config.yaml`).
+
+В compose смонтированы `${GOCRON_DATA_PATH}:/app/config` и **`${STACK_ROOT}:/source/stack:ro`** — в job можно бэкапить весь стек, например `rsync -a /source/stack/ user@backup:/backups/stack/`.
+
+После установки: `https://gocron.${DOMAIN}`. **Встроенной авторизации нет** — доступ только через HTTPS и сеть; см. [SECURITY.ru.md](SECURITY.ru.md). Duplicati и gocron дополняют друг друга: Duplicati — «кликом в UI», gocron — YAML и произвольные команды.
 
 ### Проверить конфиг compose без запуска
 
@@ -498,7 +517,7 @@ docker compose --env-file .env.stack -f docker-compose.yml restart traefik
 | `${STACK_ROOT}/nginx/public/` | Файлы статического сайта, который отдаёт NGINX при `ENABLE_NGINX=1` |
 | `${STACK_ROOT}/config/traefik/htpasswd*` | Basic Auth Traefik / Doku |
 | `${STACK_ROOT}/config/pgadmin/` | Автоподключение pgAdmin (если включён) |
-| `${STACK_ROOT}/<service>/` | Постоянные данные сервисов (bind-монты): `registry`, `portainer`, `semaphore`, `duplicati`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql` |
+| `${STACK_ROOT}/<service>/` | Постоянные данные сервисов (bind-монты): `registry`, `portainer`, `semaphore`, `duplicati`, `gocron`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql` |
 
 Всё постоянное состояние лежит под `${STACK_ROOT}` как bind-монты (без Docker named volumes), поэтому одна копия `${STACK_ROOT}` — это полный бэкап стека. Установщик создаёт каталог `${STACK_ROOT}/<service>` только для включённых сервисов и при необходимости выставляет владельца (pgAdmin `5050:5050`, Semaphore `1001:0`). Чтобы увести данные одного сервиса (например, БД на отдельный диск), задайте `<SERVICE>_DATA_PATH` в `.env` (см. раздел `[M]` в `.env.example`); путь вне `${STACK_ROOT}` тоже работает, и Windows-деплой его не трогает (он пишет только внутрь `${STACK_ROOT}`), но он не попадёт в бэкап «копией одной папки `${STACK_ROOT}`» — такой путь бэкапьте отдельно.
 

@@ -83,4 +83,4 @@ Empty passwords in `.env` are filled on first run into server **`.secrets`** (ch
 
 ## Status
 
-Installer version: **1.1.0** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).
+Installer version: **1.2.0** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).

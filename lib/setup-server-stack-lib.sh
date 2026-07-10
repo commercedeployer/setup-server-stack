@@ -223,9 +223,11 @@ apply_stack_admin_defaults() {
   : "${SEMAPHORE_ADMIN_EMAIL:=$STACK_ADMIN_EMAIL}"
   : "${DOKU_DASHBOARD_USER:=$STACK_ADMIN_USER}"
   : "${FILEBROWSER_USER:=$STACK_ADMIN_USER}"
+  : "${BESZEL_USER_EMAIL:=$STACK_ADMIN_EMAIL}"
   : "${DEPLOYER_ADMIN_USER:=$STACK_ADMIN_USER}"
   : "${MONGO_ROOT_USER:=$STACK_ADMIN_USER}"
   : "${POSTGRES_USER:=$STACK_ADMIN_USER}"
+  : "${POSTGRES_DB:=postgres}"
   # MariaDB/MySQL default to root-only; an app user/db is created only when the
   # operator sets *_USER together with *_DATABASE (see validate_enable_flags).
   : "${MONGO_EXPRESS_USER:=$STACK_ADMIN_USER}"
@@ -300,7 +302,9 @@ ensure_service_data_dirs() {
     "registry:ENABLE_REGISTRY" \
     "portainer:ENABLE_PORTAINER" \
     "duplicati:ENABLE_DUPLICATI" \
+    "gocron:ENABLE_GOCRON" \
     "kuma:ENABLE_UPTIME_KUMA" \
+    "beszel:ENABLE_BESZEL" \
     "mongo:ENABLE_MONGO" \
     "postgres:ENABLE_POSTGRES" \
     "mariadb:ENABLE_MARIADB" \
@@ -320,6 +324,20 @@ ensure_service_data_dirs() {
     mkdir -p "$pgadmin_dir"
     chown -R 5050:5050 "$pgadmin_dir" 2>/dev/null || true
   fi
+  # Beszel agent: its data dir holds the fingerprint plus the KEY/TOKEN files the
+  # installer writes. Pre-create empty secret files so the agent has them to read.
+  if [[ "${ENABLE_BESZEL_AGENT:-0}" == "1" ]]; then
+    local beszel_agent_dir; beszel_agent_dir="$(beszel_agent_data_path)"
+    mkdir -p "$beszel_agent_dir"
+    [[ -f "$beszel_agent_dir/agent.key" ]] || { : >"$beszel_agent_dir/agent.key"; chmod 600 "$beszel_agent_dir/agent.key"; }
+    [[ -f "$beszel_agent_dir/agent.token" ]] || { : >"$beszel_agent_dir/agent.token"; chmod 600 "$beszel_agent_dir/agent.token"; }
+  fi
+}
+
+# Host path for the Beszel agent data dir. svc_data_path cannot be used because
+# the service name contains a hyphen (invalid in a shell variable name).
+beszel_agent_data_path() {
+  printf '%s\n' "${BESZEL_AGENT_DATA_PATH:-$STACK_ROOT/beszel-agent}"
 }
 
 resolve_nginx_host() {
@@ -680,6 +698,19 @@ write_stack_secrets() {
     fi
   fi
 
+  if [[ "${ENABLE_BESZEL:-0}" == "1" ]]; then
+    if [[ -z "${BESZEL_USER_PASSWORD:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+      if ! grep -q '^BESZEL_USER_PASSWORD=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+        local bzp
+        bzp=$(rand_hex 16)
+        grep -v '^BESZEL_USER_PASSWORD=' "$sec" >"${sec}.tmp" 2>/dev/null || true
+        mv "${sec}.tmp" "$sec" 2>/dev/null || true
+        echo "BESZEL_USER_PASSWORD=$bzp" >>"$sec"
+        changed=1
+      fi
+    fi
+  fi
+
   if [[ "${ENABLE_MONGO:-0}" == "1" ]]; then
     if [[ -z "${MONGO_ROOT_PASSWORD:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
       if ! grep -q '^MONGO_ROOT_PASSWORD=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
@@ -859,8 +890,8 @@ render_pgadmin_config() {
   local db_host="${PGADMIN_POSTGRES_HOST:-postgres}"
   local db_port="${PGADMIN_POSTGRES_PORT:-5432}"
   local db_user="${POSTGRES_USER:-app}"
-  # Empty POSTGRES_DB means Postgres created a database named after the user.
-  local db_name="${POSTGRES_DB:-$db_user}"
+  # Superuser connects to the default postgres maintenance DB (see POSTGRES_DB).
+  local db_name="${POSTGRES_DB:-postgres}"
   local db_pass="${POSTGRES_PASSWORD:-}"
   local esc_pass
 
@@ -892,6 +923,175 @@ render_pgadmin_config() {
 EOF
   chmod 600 "$servers"
   info "pgAdmin: $servers and $pgpass — auto-linked to Postgres (${db_host}:${db_port})."
+}
+
+gocron_software_catalog() {
+  printf '%s\n' \
+    apprise borgbackup docker git podman rclone rdiff-backup restic rsync logrotate sqlite3 kopia
+}
+
+parse_gocron_software_list() {
+  local raw token
+  raw="${GOCRON_SOFTWARE:-rsync}"
+  raw="$(printf '%s' "$raw" | tr ',;' ' \n' | tr '[:upper:]' '[:lower:]')"
+  for token in $raw; do
+    token="${token//\'/}"
+    token="${token//\"/}"
+    [ -n "$token" ] || continue
+    printf '%s\n' "$token"
+  done | awk '!seen[$0]++'
+}
+
+validate_gocron_software() {
+  [[ "${ENABLE_GOCRON:-0}" == "1" ]] || return 0
+  local name invalid=() catalog
+  mapfile -t catalog < <(gocron_software_catalog)
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    local ok=0 item
+    for item in "${catalog[@]}"; do
+      [[ "$item" == "$name" ]] && ok=1 && break
+    done
+    (( ok )) || invalid+=("$name")
+  done < <(parse_gocron_software_list)
+  ((${#invalid[@]})) || return 0
+  die "GOCRON_SOFTWARE contains unknown tool(s): ${invalid[*]}. Allowed: $(gocron_software_catalog | tr '\n' ' ' | sed 's/ $//')."
+}
+
+deployer_software_catalog() {
+  printf '%s\n' \
+    bash psql postgres mysql mariadb mongosh mongo curl jq python3 python openssl rsync \
+    openssh openssh-client ssh bind dig nslookup zip
+}
+
+parse_deployer_software_list() {
+  local raw token
+  raw="${DEPLOYER_SOFTWARE:-bash,curl}"
+  raw="$(printf '%s' "$raw" | tr ',;' ' \n' | tr '[:upper:]' '[:lower:]')"
+  for token in $raw; do
+    token="${token//\'/}"
+    token="${token//\"/}"
+    [ -n "$token" ] || continue
+    printf '%s\n' "$token"
+  done | awk '!seen[$0]++'
+}
+
+validate_deployer_software() {
+  [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] || return 0
+  local name invalid=() catalog
+  mapfile -t catalog < <(deployer_software_catalog)
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    local ok=0 item
+    for item in "${catalog[@]}"; do
+      [[ "$item" == "$name" ]] && ok=1 && break
+    done
+    (( ok )) || invalid+=("$name")
+  done < <(parse_deployer_software_list)
+  ((${#invalid[@]})) || return 0
+  die "DEPLOYER_SOFTWARE contains unknown tool(s): ${invalid[*]}. Allowed: $(deployer_software_catalog | tr '\n' ' ' | sed 's/ $//'). node is always in the image."
+}
+
+build_gocron_software_yaml() {
+  local name
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    printf "  - name: '%s'\n" "$name"
+  done < <(parse_gocron_software_list)
+}
+
+build_gocron_allowed_commands_yaml() {
+  cat <<'EOF'
+    echo:
+      allow_all_args: true
+    date:
+      allow_all_args: true
+    test:
+      allow_all_args: true
+    true:
+      allow_all_args: true
+    false:
+      allow_all_args: true
+    sleep:
+      allow_all_args: true
+EOF
+  local name
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    printf "    %s:\n      allow_all_args: true\n" "$name"
+  done < <(parse_gocron_software_list)
+}
+
+render_gocron_config() {
+  [[ "${ENABLE_GOCRON:-0}" == "1" ]] || return 0
+  merge_secrets_for_compose
+  validate_gocron_software
+
+  local dir config_file tz software_yaml allowed_yaml header
+  dir="$(svc_data_path gocron)"
+  config_file="$dir/config.yaml"
+  tz="${TZ:-UTC}"
+  software_yaml="$(build_gocron_software_yaml)"
+  allowed_yaml="$(build_gocron_allowed_commands_yaml)"
+
+  mkdir -p "$dir"
+  chmod 700 "$dir"
+
+  header=$(mktemp)
+  umask 077
+  cat >"$header" <<EOF
+# Generated by setup-server-stack.sh — software from GOCRON_SOFTWARE in .env; edit jobs: in UI or here.
+time_zone: '${tz}'
+log_level: 'info'
+delete_runs_after_days: 7
+db:
+  location: '.'
+  name: 'db.sqlite'
+software:
+${software_yaml}
+terminal:
+  allow_all_commands: false
+  allowed_commands:
+${allowed_yaml}
+server:
+  address: '0.0.0.0'
+  port: 8156
+job_defaults:
+  cron: '0 3 * * 0'
+EOF
+
+  if [[ -f "$config_file" ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+      GOCRON_CONFIG="$config_file" GOCRON_HEADER="$header" python3 <<'PY'
+import os
+import pathlib
+import re
+
+config = pathlib.Path(os.environ["GOCRON_CONFIG"])
+header = pathlib.Path(os.environ["GOCRON_HEADER"]).read_text(encoding="utf-8")
+old = config.read_text(encoding="utf-8")
+match = re.search(r"^jobs:\s*\n", old, re.MULTILINE)
+jobs = old[match.start():] if match else "jobs: []\n"
+if not jobs.endswith("\n"):
+    jobs += "\n"
+config.write_text(header + jobs, encoding="utf-8")
+PY
+      rm -f "$header"
+      chmod 600 "$config_file"
+      info "gocron: updated software in $config_file (jobs preserved)."
+      return 0
+    fi
+    rm -f "$header"
+    warn "gocron: keeping existing $config_file (install python3 to refresh software list from .env)."
+    return 0
+  fi
+
+  cat >>"$header" <<'EOF'
+jobs: []
+EOF
+  mv "$header" "$config_file"
+  chmod 600 "$config_file"
+  info "gocron: wrote $config_file (software: ${GOCRON_SOFTWARE:-rsync})."
 }
 
 filebrowser_compose_cli() {
@@ -978,6 +1178,119 @@ configure_filebrowser_credentials() {
   return 0
 }
 
+# Extract a top-level string field from a JSON object read on stdin.
+# Uses python3 when available, with a naive sed fallback for simple objects.
+beszel_json_field() {
+  local field="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    BESZEL_JSON_FIELD="$field" python3 -c '
+import sys, json, os
+field = os.environ["BESZEL_JSON_FIELD"]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+value = data.get(field)
+if value is None:
+    sys.exit(1)
+print(value)
+' 2>/dev/null
+  else
+    sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+  fi
+}
+
+# Auto-register this server in Beszel: read the hub public key and a universal
+# token from the hub API, write them as agent KEY/TOKEN files, then (re)start the
+# agent so it self-registers over WebSocket. Non-fatal: on any failure the stack
+# stays up and the operator can add the system manually in the hub UI.
+configure_beszel() {
+  [[ "${ENABLE_BESZEL:-0}" == "1" ]] || return 0
+  [[ "${ENABLE_BESZEL_AGENT:-0}" == "1" ]] || return 0
+  merge_secrets_for_compose
+
+  local port="${BESZEL_HUB_LOCAL_PORT:-8090}"
+  local base="http://127.0.0.1:${port}"
+  local email="${BESZEL_USER_EMAIL:-${STACK_ADMIN_EMAIL}}"
+  local pass="${BESZEL_USER_PASSWORD:-}"
+  local agent_dir keyfile tokenfile
+  agent_dir="$(beszel_agent_data_path)"
+  keyfile="$agent_dir/agent.key"
+  tokenfile="$agent_dir/agent.token"
+  local retries="${REGISTRY_OPERATION_RETRIES:-3}"
+  local base_delay="${REGISTRY_RETRY_BACKOFF_BASE_SEC:-2}"
+  local max_delay="${REGISTRY_RETRY_BACKOFF_MAX_SEC:-10}"
+
+  if [ -z "$pass" ]; then
+    warn "Beszel: BESZEL_USER_PASSWORD is empty; skipping auto-registration."
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "Beszel: curl not found; skipping auto-registration. Add the system manually in the hub UI."
+    return 0
+  fi
+
+  step "Beszel: auto-registering this server"
+
+  local i delay ready=0
+  for ((i = 1; i <= 20; i++)); do
+    if curl -fsS -m 5 "$base/api/health" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 3
+  done
+  if [[ "$ready" -ne 1 ]]; then
+    warn "Beszel: hub API not ready on ${base}; skipping auto-registration. Add the system manually later."
+    return 0
+  fi
+
+  # PocketBase superuser (admin panel at /_/) — idempotent, best effort.
+  docker exec beszel /beszel superuser upsert "$email" "$pass" >/dev/null 2>&1 || true
+
+  # Authenticate as the dashboard user (created on first run via USER_EMAIL/USER_PASSWORD).
+  local auth_resp auth_token=""
+  for ((i = 1; i <= retries; i++)); do
+    auth_resp=$(curl -fsS -m 10 -X POST "$base/api/collections/users/auth-with-password" \
+      -H 'Content-Type: application/json' \
+      -d "{\"identity\":\"${email}\",\"password\":\"${pass}\"}" 2>/dev/null || true)
+    auth_token=$(printf '%s' "$auth_resp" | beszel_json_field token || true)
+    [ -n "$auth_token" ] && break
+    # If the hub has no users yet, create the first one, then retry auth.
+    curl -fsS -m 10 -X POST "$base/api/beszel/create-user" \
+      -H 'Content-Type: application/json' \
+      -d "{\"email\":\"${email}\",\"password\":\"${pass}\"}" >/dev/null 2>&1 || true
+    delay=$((base_delay * (2 ** (i - 1))))
+    (( delay > max_delay )) && delay="$max_delay"
+    sleep "$delay"
+  done
+  if [ -z "$auth_token" ]; then
+    warn "Beszel: could not authenticate to the hub API; skipping auto-registration. Log in at https://beszel.${DOMAIN} and add the system manually."
+    return 0
+  fi
+
+  local key token
+  key=$(curl -fsS -m 10 "$base/api/beszel/getkey" -H "Authorization: ${auth_token}" 2>/dev/null | beszel_json_field key || true)
+  token=$(curl -fsS -m 10 "$base/api/beszel/universal-token?enable=1" -H "Authorization: ${auth_token}" 2>/dev/null | beszel_json_field token || true)
+
+  if [ -z "$key" ] || [ -z "$token" ]; then
+    warn "Beszel: failed to read hub key/token from the API; skipping auto-registration."
+    return 0
+  fi
+
+  umask 077
+  mkdir -p "$agent_dir"
+  printf '%s\n' "$key" >"$keyfile"
+  chmod 600 "$keyfile"
+  printf '%s' "$token" >"$tokenfile"
+  chmod 600 "$tokenfile"
+
+  if ! docker restart beszel-agent >/dev/null 2>&1; then
+    docker compose --env-file "$STACK_ROOT/.env.stack" -f "$SCRIPT_DIR/docker-compose.yml" up -d beszel-agent >/dev/null 2>&1 || true
+  fi
+  info "Beszel: local agent configured; this server should appear in the dashboard within a minute."
+}
+
 resolve_adminer_default_server() {
   if [[ -n "${ADMINER_DEFAULT_SERVER:-}" ]]; then
     echo "$ADMINER_DEFAULT_SERVER"
@@ -1008,7 +1321,14 @@ write_env_for_compose() {
   : "${SEMAPHORE_IMAGE:=semaphoreui/semaphore:latest}"
   : "${DOKU_IMAGE:=amerkurev/doku:latest}"
   : "${DUPLICATI_IMAGE:=linuxserver/duplicati:latest}"
+  : "${GOCRON_IMAGE:=ghcr.io/flohoss/gocron:latest}"
   : "${UPTIME_KUMA_IMAGE:=louislam/uptime-kuma:1}"
+  : "${BESZEL_IMAGE:=henrygd/beszel:latest}"
+  : "${BESZEL_AGENT_IMAGE:=henrygd/beszel-agent:latest}"
+  : "${BESZEL_HUB_LOCAL_PORT:=8090}"
+  : "${BESZEL_APP_URL:=https://beszel.${DOMAIN}}"
+  : "${BESZEL_HUB_URL:=http://localhost:${BESZEL_HUB_LOCAL_PORT}}"
+  : "${BESZEL_AGENT_DISABLE_SSH:=true}"
   : "${FILEBROWSER_IMAGE:=filebrowser/filebrowser:v2-s6}"
   : "${NGINX_IMAGE:=nginx:1.27-alpine}"
   : "${NGINX_HOST:=${DOMAIN:-}}"
@@ -1049,7 +1369,7 @@ write_env_for_compose() {
   export COMPOSE_PROFILES
 
   local env_out="$STACK_ROOT/.env.stack"
-  local rp sp sk dwp dsek mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr fbp nginx_host deployer_auth_mode dap dss dapi drp drcj rpp
+  local rp sp sk dwp dsek mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr fbp nginx_host deployer_auth_mode dap dss dapi drp drcj rpp bzp bzapp bzsys
   rp="$(quote_for_env_stack "${REGISTRY_PASSWORD:-}")"
   rpp="$(quote_for_env_stack "${REGISTRY_PULL_PASSWORD:-}")"
   sp="$(quote_for_env_stack "${SEMAPHORE_ADMIN_PASSWORD:-}")"
@@ -1069,18 +1389,25 @@ write_env_for_compose() {
   fbr="$(quote_for_env_stack "${FILEBROWSER_ROOT_PATH}")"
   fbp="$(quote_for_env_stack "${FILEBROWSER_PASSWORD:-}")"
   nginx_host="$(quote_for_env_stack "$(resolve_nginx_host)")"
+  bzp="$(quote_for_env_stack "${BESZEL_USER_PASSWORD:-}")"
+  bzapp="$(quote_for_env_stack "${BESZEL_APP_URL}")"
+  bzsys="$(quote_for_env_stack "${BESZEL_SYSTEM_NAME:-}")"
   deployer_auth_mode="$(resolve_deployer_auth_mode)"
   dap="$(quote_for_env_stack "${DEPLOYER_ADMIN_PASSWORD:-}")"
   dss="$(quote_for_env_stack "${DEPLOYER_SESSION_SECRET:-}")"
   dapi="$(quote_for_env_stack "${DEPLOYER_API_KEY:-}")"
   drp="$(quote_for_env_stack "${DEPLOYER_REGISTRY_PASSWORD:-}")"
   drcj="$(quote_for_env_stack "${DEPLOYER_REGISTRY_CREDENTIALS_JSON:-[]}")"
-  local p_registry p_portainer p_semaphore p_duplicati p_kuma p_pgadmin p_postgres p_mongo p_mariadb p_mysql
+  local p_registry p_portainer p_semaphore p_duplicati p_gocron p_kuma p_pgadmin p_postgres p_mongo p_mariadb p_mysql
   p_registry="$(quote_for_env_stack "$(svc_data_path registry)")"
   p_portainer="$(quote_for_env_stack "$(svc_data_path portainer)")"
   p_semaphore="$(quote_for_env_stack "$(svc_data_path semaphore)")"
   p_duplicati="$(quote_for_env_stack "$(svc_data_path duplicati)")"
+  p_gocron="$(quote_for_env_stack "$(svc_data_path gocron)")"
   p_kuma="$(quote_for_env_stack "$(svc_data_path kuma)")"
+  local p_beszel p_beszel_agent
+  p_beszel="$(quote_for_env_stack "$(svc_data_path beszel)")"
+  p_beszel_agent="$(quote_for_env_stack "$(beszel_agent_data_path)")"
   p_pgadmin="$(quote_for_env_stack "$(svc_data_path pgadmin)")"
   p_postgres="$(quote_for_env_stack "$(svc_data_path postgres)")"
   p_mongo="$(quote_for_env_stack "$(svc_data_path mongo)")"
@@ -1095,7 +1422,10 @@ write_env_for_compose() {
     echo "PORTAINER_DATA_PATH=$p_portainer"
     echo "SEMAPHORE_DATA_PATH=$p_semaphore"
     echo "DUPLICATI_DATA_PATH=$p_duplicati"
+    echo "GOCRON_DATA_PATH=$p_gocron"
     echo "KUMA_DATA_PATH=$p_kuma"
+    echo "BESZEL_DATA_PATH=$p_beszel"
+    echo "BESZEL_AGENT_DATA_PATH=$p_beszel_agent"
     echo "PGADMIN_DATA_PATH=$p_pgadmin"
     echo "POSTGRES_DATA_PATH=$p_postgres"
     echo "MONGO_DATA_PATH=$p_mongo"
@@ -1120,7 +1450,10 @@ write_env_for_compose() {
     echo "SEMAPHORE_IMAGE=$SEMAPHORE_IMAGE"
     echo "DOKU_IMAGE=$DOKU_IMAGE"
     echo "DUPLICATI_IMAGE=$DUPLICATI_IMAGE"
+    echo "GOCRON_IMAGE=$GOCRON_IMAGE"
     echo "UPTIME_KUMA_IMAGE=$UPTIME_KUMA_IMAGE"
+    echo "BESZEL_IMAGE=$BESZEL_IMAGE"
+    echo "BESZEL_AGENT_IMAGE=$BESZEL_AGENT_IMAGE"
     echo "FILEBROWSER_IMAGE=$FILEBROWSER_IMAGE"
     echo "NGINX_IMAGE=$NGINX_IMAGE"
     echo "NGINX_HOST=\"$nginx_host\""
@@ -1142,7 +1475,18 @@ write_env_for_compose() {
     echo "ENABLE_WATCHTOWER=${ENABLE_WATCHTOWER:-0}"
     echo "ENABLE_SEMAPHORE=${ENABLE_SEMAPHORE:-0}"
     echo "ENABLE_DUPLICATI=${ENABLE_DUPLICATI:-0}"
+    echo "ENABLE_GOCRON=${ENABLE_GOCRON:-0}"
+    echo "GOCRON_SOFTWARE=${GOCRON_SOFTWARE:-rsync}"
     echo "ENABLE_UPTIME_KUMA=${ENABLE_UPTIME_KUMA:-0}"
+    echo "ENABLE_BESZEL=${ENABLE_BESZEL:-0}"
+    echo "ENABLE_BESZEL_AGENT=${ENABLE_BESZEL_AGENT:-0}"
+    echo "BESZEL_HUB_LOCAL_PORT=${BESZEL_HUB_LOCAL_PORT:-8090}"
+    echo "BESZEL_APP_URL=\"$bzapp\""
+    echo "BESZEL_HUB_URL=${BESZEL_HUB_URL}"
+    echo "BESZEL_AGENT_DISABLE_SSH=${BESZEL_AGENT_DISABLE_SSH:-true}"
+    echo "BESZEL_USER_EMAIL=${BESZEL_USER_EMAIL:-${STACK_ADMIN_EMAIL}}"
+    echo "BESZEL_USER_PASSWORD=\"$bzp\""
+    echo "BESZEL_SYSTEM_NAME=\"$bzsys\""
     echo "ENABLE_FILEBROWSER=${ENABLE_FILEBROWSER:-0}"
     echo "ENABLE_NGINX=${ENABLE_NGINX:-0}"
     echo "ENABLE_REGISTRY=${ENABLE_REGISTRY:-0}"
@@ -1165,6 +1509,7 @@ write_env_for_compose() {
     echo "DEPLOYER_REGISTRY_PASSWORD=\"$drp\""
     echo "DEPLOYER_REGISTRY_CREDENTIALS_JSON=\"$drcj\""
     echo "DEPLOYER_API_KEY=\"$dapi\""
+    echo "DEPLOYER_SOFTWARE=${DEPLOYER_SOFTWARE:-bash,curl}"
     echo "REGISTRY_AUTH_TOKEN_ISSUER=${REGISTRY_AUTH_TOKEN_ISSUER}"
     echo "REGISTRY_USER=${REGISTRY_USER}"
     echo "REGISTRY_PASSWORD=\"$rp\""
@@ -1188,7 +1533,7 @@ write_env_for_compose() {
     echo "MONGO_ROOT_PASSWORD=\"$mp\""
     echo "POSTGRES_USER=${POSTGRES_USER:-${STACK_ADMIN_USER:-app}}"
     echo "POSTGRES_PASSWORD=\"$pp\""
-    echo "POSTGRES_DB=${POSTGRES_DB:-}"
+    echo "POSTGRES_DB=${POSTGRES_DB:-postgres}"
     echo "MARIADB_USER=${MARIADB_USER:-}"
     echo "MARIADB_PASSWORD=\"$mdp\""
     echo "MARIADB_DATABASE=${MARIADB_DATABASE:-}"
@@ -1575,7 +1920,9 @@ validate_traefik_required() {
   [[ "${ENABLE_DOKU:-0}" == "1" ]] && need+=(ENABLE_DOKU)
   [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]] && need+=(ENABLE_SEMAPHORE)
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && need+=(ENABLE_DUPLICATI)
+  [[ "${ENABLE_GOCRON:-0}" == "1" ]] && need+=(ENABLE_GOCRON)
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && need+=(ENABLE_UPTIME_KUMA)
+  [[ "${ENABLE_BESZEL:-0}" == "1" ]] && need+=(ENABLE_BESZEL)
   [[ "${ENABLE_FILEBROWSER:-0}" == "1" ]] && need+=(ENABLE_FILEBROWSER)
   [[ "${ENABLE_NGINX:-0}" == "1" ]] && need+=(ENABLE_NGINX)
   [[ "${ENABLE_REGISTRY:-0}" == "1" ]] && need+=(ENABLE_REGISTRY)
@@ -1597,7 +1944,10 @@ validate_enable_flags() {
   ENABLE_WATCHTOWER="${ENABLE_WATCHTOWER:-0}"
   ENABLE_SEMAPHORE="${ENABLE_SEMAPHORE:-0}"
   ENABLE_DUPLICATI="${ENABLE_DUPLICATI:-0}"
+  ENABLE_GOCRON="${ENABLE_GOCRON:-0}"
   ENABLE_UPTIME_KUMA="${ENABLE_UPTIME_KUMA:-0}"
+  ENABLE_BESZEL="${ENABLE_BESZEL:-0}"
+  ENABLE_BESZEL_AGENT="${ENABLE_BESZEL_AGENT:-${ENABLE_BESZEL}}"
   ENABLE_FILEBROWSER="${ENABLE_FILEBROWSER:-0}"
   ENABLE_NGINX="${ENABLE_NGINX:-0}"
   ENABLE_REGISTRY="${ENABLE_REGISTRY:-0}"
@@ -1643,6 +1993,7 @@ validate_enable_flags() {
     [ -n "$REGISTRY_PULL_USER" ] || die "REGISTRY_PULL_USER is empty."
     [[ "$REGISTRY_PULL_USER" != "$REGISTRY_USER" ]] || die "REGISTRY_PULL_USER must differ from REGISTRY_USER ($REGISTRY_USER)."
   fi
+  [[ "${ENABLE_BESZEL_AGENT:-0}" != "1" ]] || [[ "${ENABLE_BESZEL:-0}" == "1" ]] || die "ENABLE_BESZEL_AGENT=1 requires ENABLE_BESZEL=1 (the local agent self-registers with the local hub)."
   [[ "${ENABLE_MONGO_EXPRESS:-0}" != "1" ]] || [[ "${ENABLE_MONGO:-0}" == "1" ]] || die "ENABLE_MONGO_EXPRESS=1 requires ENABLE_MONGO=1"
   [[ "${ENABLE_PGADMIN:-0}" != "1" ]] || [[ "${ENABLE_POSTGRES:-0}" == "1" ]] || die "ENABLE_PGADMIN=1 requires ENABLE_POSTGRES=1"
   # MariaDB/MySQL create an app user only with a database to grant on; a user
@@ -1671,6 +2022,8 @@ validate_enable_flags() {
     warn "REGISTRY_SEED_IMAGES set but ENABLE_REGISTRY=0 — seed image push skipped."
   fi
   warn_filebrowser_root_path
+  validate_gocron_software
+  validate_deployer_software
   validate_traefik_required
   validate_tls_domain_config
 }
@@ -1683,7 +2036,10 @@ compose_profiles() {
   [[ "${ENABLE_WATCHTOWER:-0}" == "1" ]] && p="${p},watchtower"
   [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]] && p="${p},semaphore"
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && p="${p},duplicati"
+  [[ "${ENABLE_GOCRON:-0}" == "1" ]] && p="${p},gocron"
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && p="${p},kuma"
+  [[ "${ENABLE_BESZEL:-0}" == "1" ]] && p="${p},beszel"
+  [[ "${ENABLE_BESZEL_AGENT:-0}" == "1" ]] && p="${p},beszel-agent"
   [[ "${ENABLE_FILEBROWSER:-0}" == "1" ]] && p="${p},filebrowser"
   [[ "${ENABLE_NGINX:-0}" == "1" ]] && p="${p},nginx"
   [[ "${ENABLE_REGISTRY:-0}" == "1" ]] && p="${p},registry"
@@ -1876,7 +2232,9 @@ https_service_hosts() {
   [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]] && echo "Semaphore|semaphore.${d}"
   [[ "${ENABLE_DOKU:-0}" == "1" ]] && echo "Doku|doku.${d}"
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && echo "Duplicati|duplicati.${d}"
+  [[ "${ENABLE_GOCRON:-0}" == "1" ]] && echo "gocron|gocron.${d}"
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && echo "Uptime Kuma|kuma.${d}"
+  [[ "${ENABLE_BESZEL:-0}" == "1" ]] && echo "Beszel|beszel.${d}"
   [[ "${ENABLE_FILEBROWSER:-0}" == "1" ]] && echo "Filebrowser|filebrowser.${d}"
   [[ "${ENABLE_NGINX:-0}" == "1" ]] && echo "NGINX static site|$(resolve_nginx_host)"
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] && echo "Deployer|deployer.${d}"
@@ -2128,7 +2486,10 @@ print_urls() {
   [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]] && echo "  Semaphore:   https://semaphore.${d}"
   [[ "${ENABLE_DOKU:-0}" == "1" ]] && echo "  Doku:        https://doku.${d}"
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && echo "  Duplicati:   https://duplicati.${d}"
+  [[ "${ENABLE_GOCRON:-0}" == "1" ]] && echo "  gocron:      https://gocron.${d}  (no built-in login — HTTPS edge only; jobs in UI or config.yaml)"
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && echo "  Kuma:        https://kuma.${d}"
+  [[ "${ENABLE_BESZEL:-0}" == "1" ]] && echo "  Beszel:      https://beszel.${d}  (login ${BESZEL_USER_EMAIL:-${STACK_ADMIN_EMAIL}}, password in BESZEL_USER_PASSWORD in .secrets)"
+  [[ "${ENABLE_BESZEL_AGENT:-0}" == "1" ]] && echo "                 this server is auto-registered in Beszel as a monitored system."
   [[ "${ENABLE_FILEBROWSER:-0}" == "1" ]] && echo "  Filebrowser: https://filebrowser.${d}  (rw: ${FILEBROWSER_ROOT_PATH:-/opt}; login ${FILEBROWSER_USER:-${STACK_ADMIN_USER:-admin}}, password in FILEBROWSER_PASSWORD)"
   [[ "${ENABLE_NGINX:-0}" == "1" ]] && echo "  NGINX site:  https://$(resolve_nginx_host)  (files: $(resolve_nginx_public_path))"
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] && echo "  Deployer:    https://deployer.${d}"
@@ -2192,6 +2553,7 @@ main() {
   login_additional_registries
   render_watchtower_docker_config
   render_pgadmin_config
+  render_gocron_config
   prepare_deployer_image
   push_registry_seed_images
   initialize_nginx_public_dir
@@ -2217,6 +2579,7 @@ main() {
   fi
 
   configure_filebrowser_credentials
+  configure_beszel
   diagnose_traefik_tls
   export_production_acme_certificates
   print_urls

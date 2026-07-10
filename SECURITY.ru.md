@@ -28,7 +28,8 @@
 
 Остальные HTTPS-панели защищены **только логином приложения** (или мастером «первого захода»):
 
-| Логин в приложении | Portainer, Semaphore, Duplicati (`DUPLICATI_WEBSERVICE_PASSWORD`), Uptime Kuma, Filebrowser (`STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; `FILEBROWSER_USER` может переопределить), Deployer (если включён), mongo-express, pgAdmin, Adminer |
+| Логин в приложении | Portainer, Semaphore, Duplicati (`DUPLICATI_WEBSERVICE_PASSWORD`), Uptime Kuma, Beszel (`STACK_ADMIN_EMAIL` + `BESZEL_USER_PASSWORD`), Filebrowser (`STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; `FILEBROWSER_USER` может переопределить), Deployer (если включён), mongo-express, pgAdmin, Adminer |
+| Без логина в приложении | **gocron** (`ENABLE_GOCRON=1`) — любой, кто откроет `https://gocron.${DOMAIN}`, может смотреть и править задания; ограничивайте сетью, VPN или middleware Traefik |
 | Не браузерная панель | Registry (`docker login`), Registry auth (`registry-auth.${DOMAIN}`) |
 
 **Практика**

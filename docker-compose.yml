@@ -1,4 +1,4 @@
-# Setup Server Stack (Traefik 3.6, Registry + Registry auth, Portainer, Watchtower, Semaphore, Doku, Duplicati, Kuma, Filebrowser, NGINX static site).
+# Setup Server Stack (Traefik 3.6, Registry + Registry auth, Portainer, Watchtower, Semaphore, Doku, Duplicati, Kuma, Beszel, Filebrowser, NGINX static site).
 # Optional DBs and DB UIs: use COMPOSE_PROFILES or `docker compose --profile <name>`.
 # Run: sudo bash setup-server-stack.sh — writes $STACK_ROOT/.env.stack for docker compose.
 # All persistent data lives under $STACK_ROOT/<service> (bind mounts), so one folder = full backup.
@@ -197,6 +197,29 @@ services:
     networks:
       - proxynet
 
+  # gocron — cron scheduler + web UI; config.yaml (software + jobs) under ${GOCRON_DATA_PATH}.
+  # Stack data is mounted read-only at /source/stack for rsync/restic/rclone jobs.
+  gocron:
+    profiles: [gocron]
+    image: ${GOCRON_IMAGE:-ghcr.io/flohoss/gocron:latest}
+    container_name: gocron
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${GOCRON_DATA_PATH:-${STACK_ROOT}/gocron}:/app/config
+      - ${STACK_ROOT}:/source/stack:ro
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxynet
+      - traefik.http.routers.gocron.rule=Host(`gocron.${DOMAIN}`)
+      - traefik.http.routers.gocron.entrypoints=websecure
+      - traefik.http.routers.gocron.tls=true
+      - traefik.http.routers.gocron.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}
+      - traefik.http.services.gocron.loadbalancer.server.port=8156
+    networks:
+      - proxynet
+
   # Duplicati — backup UI only; job sources/destinations are configured in the web UI.
   # All stack data lives under ${STACK_ROOT}, so one read-only mount backs up everything:
   #   - ${STACK_ROOT}:/source/stack:ro
@@ -241,6 +264,58 @@ services:
       - traefik.http.services.kuma.loadbalancer.server.port=3001
     networks:
       - proxynet
+
+  # Beszel — lightweight server monitoring hub (web UI). Image: https://hub.docker.com/r/henrygd/beszel
+  # The hub is published on loopback (127.0.0.1) only so the installer and the
+  # host-network agent can reach the API locally; public access is via Traefik.
+  beszel:
+    profiles: [beszel]
+    image: ${BESZEL_IMAGE:-henrygd/beszel:latest}
+    container_name: beszel
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      APP_URL: ${BESZEL_APP_URL:-https://beszel.${DOMAIN}}
+      TZ: ${TZ:-UTC}
+      USER_EMAIL: ${BESZEL_USER_EMAIL:-}
+      USER_PASSWORD: ${BESZEL_USER_PASSWORD:-}
+    ports:
+      - "127.0.0.1:${BESZEL_HUB_LOCAL_PORT:-8090}:8090"
+    volumes:
+      - ${BESZEL_DATA_PATH:-${STACK_ROOT}/beszel}:/beszel_data
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxynet
+      - traefik.http.routers.beszel.rule=Host(`beszel.${DOMAIN}`)
+      - traefik.http.routers.beszel.entrypoints=websecure
+      - traefik.http.routers.beszel.tls=true
+      - traefik.http.routers.beszel.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}
+      - traefik.http.services.beszel.loadbalancer.server.port=8090
+    networks:
+      - proxynet
+
+  # Beszel agent — monitors the host it runs on and self-registers with the local
+  # hub over WebSocket (no inbound port; DISABLE_SSH=true). KEY/TOKEN are written
+  # by the installer (configure_beszel) into the agent data dir as files.
+  beszel-agent:
+    profiles: [beszel-agent]
+    image: ${BESZEL_AGENT_IMAGE:-henrygd/beszel-agent:latest}
+    container_name: beszel-agent
+    restart: unless-stopped
+    network_mode: host
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HUB_URL: ${BESZEL_HUB_URL:-http://localhost:${BESZEL_HUB_LOCAL_PORT:-8090}}
+      DISABLE_SSH: ${BESZEL_AGENT_DISABLE_SSH:-true}
+      SYSTEM_NAME: ${BESZEL_SYSTEM_NAME:-}
+      DATA_DIR: /beszel_agent_data
+      KEY_FILE: /beszel_agent_data/agent.key
+      TOKEN_FILE: /beszel_agent_data/agent.token
+    volumes:
+      - ${BESZEL_AGENT_DATA_PATH:-${STACK_ROOT}/beszel-agent}:/beszel_agent_data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # File Browser — web file manager; image: https://hub.docker.com/r/filebrowser/filebrowser
   filebrowser:
@@ -297,6 +372,7 @@ services:
       ADMIN_USER: ${DEPLOYER_ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${DEPLOYER_ADMIN_PASSWORD:-}
       SESSION_SECRET: ${DEPLOYER_SESSION_SECRET:-}
+      DEPLOYER_PUBLIC_BASE_URL: ${DEPLOYER_PUBLIC_BASE_URL:-https://deployer.${DOMAIN}}
       DEPLOYER_AUTH_MODE: ${DEPLOYER_AUTH_MODE:-dual}
       PORT: 3000
       DEPLOY_BASE_PATH: ${DEPLOY_BASE_PATH:-/opt/deploy-data}
@@ -310,6 +386,10 @@ services:
       REGISTRY_PASSWORD: ${REGISTRY_PASSWORD:-}
       REGISTRY_CREDENTIALS_JSON: ${DEPLOYER_REGISTRY_CREDENTIALS_JSON:-}
       API_KEY: ${DEPLOYER_API_KEY:-}
+      DEPLOYER_SOFTWARE: ${DEPLOYER_SOFTWARE:-bash,curl}
+      POSTGRES_ADMIN_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-postgres}
+      POSTGRES_HOST: postgres
+      SHARED_APP_NETWORK: proxynet
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DEPLOY_BASE_PATH:-/opt/deploy-data}:${DEPLOY_BASE_PATH:-/opt/deploy-data}
@@ -361,11 +441,11 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
-      POSTGRES_DB: ${POSTGRES_DB:-}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
     volumes:
       - ${POSTGRES_DATA_PATH:-${STACK_ROOT}/postgres}:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$${POSTGRES_DB:-$$POSTGRES_USER}\""]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$${POSTGRES_DB:-postgres}\""]
       interval: 10s
       timeout: 5s
       retries: 5

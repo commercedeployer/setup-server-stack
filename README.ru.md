@@ -83,4 +83,4 @@ Setup Server Stack — **нижний слой** (инфраструктура V
 
 ## Статус
 
-Версия установщика: **1.1.0** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).
+Версия установщика: **1.2.0** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).

@@ -4,6 +4,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-10
+
 ### Changed
 
 - **Deployer MCP env:** removed `DEPLOYER_MCP_ENABLED` and `DEPLOYER_MCP_KEY_PEPPER`; MCP key hashes use `DEPLOYER_SESSION_SECRET` only. Added **`DEPLOYER_PUBLIC_BASE_URL`** (default `https://deployer.${DOMAIN}` in compose) for Cursor/MCP hints. **`DEPLOYER_MCP_TOOLS_DENY`** — optional MCP tool denylist on deploy.

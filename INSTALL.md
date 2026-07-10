@@ -20,6 +20,7 @@ One Linux VPS runs Docker containers for:
 | Docker disk usage | **Doku** |
 | Backups | **Duplicati** |
 | Uptime monitoring | **Uptime Kuma** |
+| Server metrics | **Beszel** (local agent auto-registered) |
 | File manager | **Filebrowser** |
 | Optional deploy app | **Deployer** (pre-built image via `DEPLOYER_IMAGE`) |
 | Optional DBs + web UIs | Mongo, Postgres, MariaDB, MySQL, mongo-express, pgAdmin, Adminer |
@@ -246,7 +247,9 @@ Replace `example.com` with your **`DOMAIN`**:
 | Semaphore | `https://semaphore.example.com` | `STACK_ADMIN_USER` + `SEMAPHORE_ADMIN_PASSWORD` |
 | Doku | `https://doku.example.com` | `STACK_ADMIN_USER` + `DOKU_DASHBOARD_PASSWORD` |
 | Duplicati | `https://duplicati.example.com` | Password: `DUPLICATI_WEBSERVICE_PASSWORD` from secrets; backup jobs configured in UI (see §8) |
+| gocron | `https://gocron.example.com` | No built-in login — HTTPS edge only; jobs in UI or `config.yaml` (see §8) |
 | Uptime Kuma | `https://kuma.example.com` | Create admin on first visit; secrets marker: `UPTIME_KUMA_ADMIN_PASSWORD=SET_ON_FIRST_LOGIN` |
+| Beszel | `https://beszel.example.com` | Login `STACK_ADMIN_EMAIL` + `BESZEL_USER_PASSWORD` from secrets; this server is auto-registered as a monitored system (no manual "Add System") |
 | Filebrowser | `https://filebrowser.example.com` | `STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; rw host path from `FILEBROWSER_ROOT_PATH` (empty = `$STACK_ROOT/filebrowser/files`) |
 | Deployer | `https://deployer.example.com` | `DEPLOYER_AUTH_MODE=dual` by default: UI uses `STACK_ADMIN_USER` / `DEPLOYER_ADMIN_PASSWORD`; API uses `DEPLOYER_API_KEY` |
 
@@ -366,6 +369,12 @@ When the stack registry is enabled, Deployer uses `registry.${DOMAIN}` to deploy
 
 Pull policy inside Deployer (for app images): `DEPLOYER_DEFAULT_PULL_POLICY=always` | `ifNotPresent` with retries (`DEPLOYER_PULL_MAX_ATTEMPTS`).
 
+**Provision tools** (inside the Deployer **container**, not on Ubuntu): `DEPLOYER_SOFTWARE` in `.env` — comma-separated keys, default `bash,curl`. `node` is always present. For Postgres tenant templates (`umami-pg`) add `psql`, e.g. `bash,curl,psql`. Full list in `.env.example` § Deployer.
+
+**MCP / Cursor:** issue keys in Deployer UI (**MCP / AI**). `DEPLOYER_PUBLIC_BASE_URL` defaults to `https://deployer.${DOMAIN}` in compose (override in `.env` if needed). Key hashes use `DEPLOYER_SESSION_SECRET` — no separate MCP pepper or enable flag. Optional **`DEPLOYER_MCP_TOOLS_DENY`** — comma-separated MCP tool names to block on this host.
+
+**Multi-node deployer pools** use `volume_policy: replicate` by default in Commerce: each node keeps local data under `DEPLOY_BASE_PATH`; Commerce orchestrates `POST /api/volumes/:name/sync` between deployer nodes (bytes never pass through Commerce).
+
 ### Duplicati (backups)
 
 The stack starts the **Duplicati web UI** and stores its settings in `${STACK_ROOT}/duplicati`. It does **not** configure backup jobs for you:
@@ -377,6 +386,18 @@ The stack starts the **Duplicati web UI** and stores its settings in `${STACK_RO
 After install, open `https://duplicati.${DOMAIN}`, log in with `DUPLICATI_WEBSERVICE_PASSWORD` from secrets, then create a backup job in the UI.
 
 By default Duplicati only sees its own `/config` inside the container. Since all stack data lives under `${STACK_ROOT}`, add a single **read-only** bind mount of `${STACK_ROOT}` to the `duplicati` service in `docker-compose.yml` (an example is commented there), then `docker compose ... up -d`. Paths must be readable by `DUP_PUID` / `DUP_PGID` (default `1000`).
+
+### gocron (cron + backup utilities)
+
+Optional: **`ENABLE_GOCRON=1`**. Web UI cron scheduler ([flohoss/gocron](https://github.com/flohoss/gocron)) for shell jobs — rsync, restic, rclone, etc.
+
+The installer writes `${GOCRON_DATA_PATH}/config.yaml` (default `${STACK_ROOT}/gocron/config.yaml`):
+
+- **`GOCRON_SOFTWARE`** — comma- or semicolon-separated tools (default `rsync`). Allowed: `apprise`, `borgbackup`, `docker`, `git`, `podman`, `rclone`, `rdiff-backup`, `restic`, `rsync`, `logrotate`, `sqlite3`, `kopia`. The container installs them on start. On re-run, only the `software` block is refreshed; existing `jobs:` are kept (delete `config.yaml` to start fresh).
+
+Compose mounts `${GOCRON_DATA_PATH}:/app/config` and **`${STACK_ROOT}:/source/stack:ro`** — jobs can back up the whole stack, e.g. `rsync -a /source/stack/ user@backup:/backups/stack/`.
+
+Open `https://gocron.${DOMAIN}` after install. **No application login** — protect via network/Traefik; see [SECURITY.md](SECURITY.md). Duplicati and gocron complement each other: Duplicati for click-through backups, gocron for YAML and custom commands.
 
 ### Validate compose config
 
@@ -434,7 +455,7 @@ Already issued certificates stay in `${STACK_ROOT}/traefik/acme.json`; do not ru
 | `${STACK_ROOT}/nginx/public/` | Static site files served by NGINX when `ENABLE_NGINX=1` |
 | `${STACK_ROOT}/config/traefik/htpasswd*` | Basic Auth for Traefik / Doku |
 | `${STACK_ROOT}/config/pgadmin/` | pgAdmin auto-connect (if enabled) |
-| `${STACK_ROOT}/<service>/` | Per-service persistent data (bind mounts): `registry`, `portainer`, `semaphore`, `duplicati`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql` |
+| `${STACK_ROOT}/<service>/` | Per-service persistent data (bind mounts): `registry`, `portainer`, `semaphore`, `duplicati`, `gocron`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql` |
 
 All persistent state lives under `${STACK_ROOT}` as bind mounts (no Docker named volumes), so a single copy of `${STACK_ROOT}` is a full backup of the stack. The installer creates each `${STACK_ROOT}/<service>` only for enabled services and sets ownership where needed (pgAdmin `5050:5050`, Semaphore `1001:0`). To relocate one service's data (e.g. a database onto a separate disk), set `<SERVICE>_DATA_PATH` in `.env` (see `.env.example` section `[M]`); a path outside `${STACK_ROOT}` still works and is left untouched by the Windows deploy (it only writes inside `${STACK_ROOT}`), but it is not included when you back up by copying `${STACK_ROOT}` — back such a path up separately.
 

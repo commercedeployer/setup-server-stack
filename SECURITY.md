@@ -28,7 +28,8 @@ Panels are published as `https://<service>.${DOMAIN}`. **Traefik Basic Auth** (e
 
 All other HTTPS panels rely on **application login only** (or a first-visit setup wizard):
 
-| Application login | Portainer, Semaphore, Duplicati (`DUPLICATI_WEBSERVICE_PASSWORD`), Uptime Kuma, Filebrowser (`STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; `FILEBROWSER_USER` can override), Deployer (if enabled), mongo-express, pgAdmin, Adminer |
+| Application login | Portainer, Semaphore, Duplicati (`DUPLICATI_WEBSERVICE_PASSWORD`), Uptime Kuma, Beszel (`STACK_ADMIN_EMAIL` + `BESZEL_USER_PASSWORD`), Filebrowser (`STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; `FILEBROWSER_USER` can override), Deployer (if enabled), mongo-express, pgAdmin, Adminer |
+| No application login | **gocron** (`ENABLE_GOCRON=1`) — anyone who can reach `https://gocron.${DOMAIN}` can view and edit cron jobs; restrict by network, VPN, or Traefik middleware |
 | Not a browser UI | Registry (`docker login`), Registry auth (`registry-auth.${DOMAIN}`) |
 
 **What this means**

@@ -124,7 +124,7 @@ $stRoot = Join-Path $env:TEMP ("sss-deploy-{0}" -f $PID)
 $st = Join-Path $stRoot $remoteLeaf
 if (Test-Path -LiteralPath $stRoot) { Remove-Item -LiteralPath $stRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $st -Force | Out-Null
-$excludeDirs = @(".git", ".ssh-bootstrap", ".cursor", "secrets", "traefik", "filebrowser", "certs", "registry", "portainer", "semaphore", "duplicati", "kuma", "pgadmin", "postgres", "mongo", "mariadb", "mysql")
+$excludeDirs = @(".git", ".ssh-bootstrap", ".cursor", "secrets", "traefik", "filebrowser", "certs", "registry", "portainer", "semaphore", "duplicati", "gocron", "kuma", "pgadmin", "postgres", "mongo", "mariadb", "mysql")
 $excludeFiles = @(
     ".secrets", ".setup-server-stack-secrets", ".env.stack",
     "*.secrets", "*.secrets-backup", "secrets-backup.txt",
@@ -184,7 +184,7 @@ $installFlag = if ($ForceSecrets) { " --force-secrets" } else { "" }
 $remoteInstallCmd = (('cd ''{0}'' ' + $aa + ' ' + $sedLf + ' ' + $aa + ' chmod +x setup-server-stack.sh install.sh ' + $aa + ' bash ./setup-server-stack.sh --skip-ssh-hardening{1}') -f $RemotePath, $installFlag)
 $remoteHardenCmd = (('cd ''{0}'' ' + $aa + ' bash ./setup-server-stack.sh --ssh-hardening-only') -f $RemotePath)
 $remoteStateDir = "/tmp/setup-server-stack-preserve-$PID"
-$runtimePaths = @(".secrets", ".env.stack", "traefik", "certs", "config", "filebrowser", "nginx", "secrets", "docker-compose.override.yml", "registry", "portainer", "semaphore", "duplicati", "kuma", "pgadmin", "postgres", "mongo", "mariadb", "mysql")
+$runtimePaths = @(".secrets", ".env.stack", "traefik", "certs", "config", "filebrowser", "nginx", "secrets", "docker-compose.override.yml", "registry", "portainer", "semaphore", "duplicati", "gocron", "kuma", "pgadmin", "postgres", "mongo", "mariadb", "mysql")
 $runtimeList = ($runtimePaths | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join " "
 $remotePrepare = @"
 set -eu
