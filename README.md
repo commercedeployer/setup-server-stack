@@ -16,7 +16,7 @@ Works as a **main** host (Traefik, registry, panels) or a lean **node** via [Com
 |----------|----------|
 | Network & TLS | Traefik 3.6, custom certs from `certs/<host>/`, Let's Encrypt production/staging, self-signed QA mode |
 | Images | Private Docker Registry + Registry auth (`docker_auth` token flow) |
-| Operations | Portainer, Watchtower, Semaphore, Doku, Duplicati, Uptime Kuma, Filebrowser, NGINX static site |
+| Operations | Portainer, Watchtower, Semaphore, Doku, Duplicati, gocron, Uptime Kuma, Beszel (with auto-registered local agent), Filebrowser, NGINX static site |
 | App deployment | Deployer (optional, `ENABLE_DEPLOYER=1` + `DEPLOYER_IMAGE`) |
 | Databases | MongoDB, PostgreSQL, MariaDB, MySQL (optional) |
 | DB web UIs | mongo-express, pgAdmin (auto-linked to Postgres), Adminer |
@@ -77,10 +77,15 @@ Empty passwords in `.env` are filled on first run into server **`.secrets`** (ch
 
 ## License
 
-[MIT](LICENSE)
+**D-commerce Deployer Source License 1.0** — [LICENSE](LICENSE).
+
+- **v2.0.0+** (this tree): same terms as [Deployer](https://github.com/commercedeployer/deployer) v2; internal use to deliver **your** product is allowed; monetizing **through users' use of Deployer** (including via this installer) requires a [commercial license](docs/LICENSE-SUMMARY-RU.md).
+- **v1.x and earlier:** [MIT](LICENSE-MIT.md).
+
+See [CHANGELOG.md](CHANGELOG.md). Russian summary: [docs/LICENSE-SUMMARY-RU.md](docs/LICENSE-SUMMARY-RU.md).
 
 ---
 
 ## Status
 
-Installer version: **1.1.0** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).
+Installer version: **2.0.0** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).

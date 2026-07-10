@@ -1,21 +1,112 @@
-MIT License
+D-commerce Deployer Source License 1.0
 
-Copyright (c) 2026 deployer-commerce
+Copyright (c) 2026 D-commerce
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license applies to the Setup Server Stack installer, scripts, compose
+templates, and related files in this repository. The Deployer application
+installed via `DEPLOYER_IMAGE` is governed by the license in the Deployer
+repository (same license family from Deployer v2.0.0 onward).
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Definitions
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+   "Software" means the Setup Server Stack source (installer scripts, library,
+   compose files, documentation, and other files in this repository), including
+   modifications you make.
+
+   "End Users" means third parties who use your products or services.
+
+   "Your Product" means applications, content, or services that you own or have
+   the right to offer, where the primary value to End Users is not access to
+   deployment-management capabilities provided by the Software or by Deployer
+   installed through the Software.
+
+   "Competing Offering" means a product or service whose primary purpose is
+   multi-tenant or template-based container deployment, container lifecycle
+   management, volume orchestration across hosts, or AI/agent-driven Docker
+   deployment administration (including via MCP or similar protocols), whether
+   offered for a fee or at no charge.
+
+2. Grant — permitted uses
+
+   Subject to this License, D-commerce grants you a non-exclusive,
+   non-transferable, royalty-free license to:
+
+   (a) use, install, and run the Software internally to provision and operate
+       infrastructure for the purpose of delivering Your Product to End Users,
+       where revenue from End Users is primarily attributable to Your Product
+       and not to access to or use of deployment-management capabilities
+       provided by the Software or Deployer;
+
+   (b) modify the Software for your internal use as described in (a);
+
+   (c) make copies reasonably necessary for backup and internal operations
+       under (a)–(b).
+
+3. Restrictions
+
+   Except with prior written permission from D-commerce, you may not:
+
+   (a) distribute, sublicense, sell, or offer the Software (or substantial
+       portions or derivatives whose primary purpose is substantially similar
+       deployment-management functionality) as a standalone or bundled product
+       or service;
+
+   (b) require or invite End Users to install, connect, configure, or use the
+       Software or Deployer (or a derivative) as a condition of accessing your
+       commercial product, service, or platform — including offering them "for
+       free" as a connector, agent, or companion to your paid or commercial
+       offering;
+
+   (c) derive revenue from End Users to the extent that such revenue is
+       attributable to those End Users' use of the Software or Deployer —
+       whether or not you charge separately for the Software; whether or not
+       End Users are required to install, connect to, or otherwise interact
+       with the Software directly; and whether or not the Software is presented
+       as a separate component or embedded within your product, service, or
+       user interface such that End Users do not perceive the Software as
+       distinct from your offering;
+
+   (d) provide a Competing Offering based on the Software, Deployer installed
+       through it, or their substantial portions;
+
+   (e) remove or alter copyright and license notices in copies you are
+       permitted to make.
+
+4. Commercial license
+
+   Uses restricted under Section 3 require a separate written Commercial
+   License from D-commerce.
+
+   Contact: https://github.com/commercedeployer/setup-server-stack/issues
+   (subject: "Commercial license") or your D-commerce representative.
+
+5. Prior versions
+
+   Versions of the Software released prior to 2.0.0 were distributed under the
+   MIT License. A copy is in [LICENSE-MIT.md](LICENSE-MIT.md). Those versions
+   remain available under MIT for parties who obtained them under MIT.
+
+6. No trademark
+
+   This License does not grant permission to use D-commerce, Deployer, or
+   related trade names, logos, or trademarks.
+
+7. Disclaimer
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+   D-COMMERCE BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN
+   AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+8. Limitation of liability
+
+   IN NO EVENT SHALL D-COMMERCE'S TOTAL LIABILITY EXCEED ONE HUNDRED (100)
+   US DOLLARS. THE FOREGOING LIMITATIONS APPLY TO THE FULLEST EXTENT PERMITTED
+   BY APPLICABLE LAW.
+
+9. Termination
+
+   Your rights under this License terminate automatically if you breach
+   Section 3. Sections 6–8 survive termination.

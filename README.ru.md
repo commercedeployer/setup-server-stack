@@ -16,7 +16,7 @@
 |-----------|---------|
 | Сеть и TLS | Traefik 3.6, свои сертификаты из `certs/<host>/`, Let's Encrypt production/staging, self-signed QA-режим |
 | Образы | Private Docker Registry + Registry auth (`docker_auth` token flow) |
-| Операции | Portainer, Watchtower, Semaphore, Doku, Duplicati, Uptime Kuma, Filebrowser, статический сайт NGINX |
+| Операции | Portainer, Watchtower, Semaphore, Doku, Duplicati, gocron, Uptime Kuma, Beszel (с авто-регистрацией локального агента), Filebrowser, статический сайт NGINX |
 | Деплой приложений | Deployer (опционально, `ENABLE_DEPLOYER=1` + `DEPLOYER_IMAGE`) |
 | Базы данных | MongoDB, PostgreSQL, MariaDB, MySQL (опционально) |
 | Веб-морды БД | mongo-express, pgAdmin (автопривязка к Postgres), Adminer |
@@ -77,10 +77,15 @@ Setup Server Stack — **нижний слой** (инфраструктура V
 
 ## Лицензия
 
-[MIT](LICENSE)
+**D-commerce Deployer Source License 1.0** — [LICENSE](LICENSE).
+
+- **v2.0.0+** (это дерево): те же условия, что у [Deployer](https://github.com/commercedeployer/deployer) v2; внутреннее использование для **своего** продукта — можно; заработок **через использование Deployer пользователями** (в т.ч. через этот установщик) — только с [коммерческой лицензией](docs/LICENSE-SUMMARY-RU.md).
+- **v1.x и ранее:** [MIT](LICENSE-MIT.md).
+
+См. [CHANGELOG.md](CHANGELOG.md). Кратко: [docs/LICENSE-SUMMARY-RU.md](docs/LICENSE-SUMMARY-RU.md).
 
 ---
 
 ## Статус
 
-Версия установщика: **1.1.0** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).
+Версия установщика: **2.0.0** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).

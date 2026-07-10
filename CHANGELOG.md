@@ -4,14 +4,32 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Deployer MCP env:** removed `DEPLOYER_MCP_ENABLED` and `DEPLOYER_MCP_KEY_PEPPER`; MCP key hashes use `DEPLOYER_SESSION_SECRET` only. Added **`DEPLOYER_PUBLIC_BASE_URL`** (default `https://deployer.${DOMAIN}` in compose) for Cursor/MCP hints. **`DEPLOYER_MCP_TOOLS_DENY`** — optional MCP tool denylist on deploy.
+
 ### Added
 
+- **`DEPLOYER_SOFTWARE`** — optional Alpine tools inside the Deployer container for provision/deprovision (default `bash,curl`; e.g. add `psql` for `umami-pg`). Passed from `.env` via `deployer/docker/entrypoint.sh`. Documented in INSTALL § Deployer; Commerce/Deployer admin docs cross-link here.
+- Optional **gocron** cron scheduler (`ENABLE_GOCRON=1`): Traefik at `gocron.${DOMAIN}`, config under `$STACK_ROOT/gocron/config.yaml`. Installer preconfigures `software:` from `GOCRON_SOFTWARE` (default `rsync`; optional restic, rclone, …). Read-only `${STACK_ROOT}:/source/stack` mount for backup jobs. No built-in UI auth — see SECURITY.md. **Documented only in setup-server-stack** (not Commerce/Deployer admin docs).
+- Beszel server monitoring (`ENABLE_BESZEL`): hub behind Traefik at `beszel.${DOMAIN}` with first user auto-created from `BESZEL_USER_EMAIL`/`BESZEL_USER_PASSWORD` (password generated into `.secrets`). A local agent (`ENABLE_BESZEL_AGENT`, defaults to `ENABLE_BESZEL`) is auto-registered to monitor this server out of the box: the installer reads the hub public key and a universal token from the hub API and writes them as the agent's `KEY`/`TOKEN` files, so no manual "Add System" step is needed. The agent connects over WebSocket only (`DISABLE_SSH=true`, no inbound port); the hub is published on loopback (`127.0.0.1:8090`) for local provisioning while public access stays via Traefik. Data lives under `$STACK_ROOT/beszel` and `$STACK_ROOT/beszel-agent`.
 - Optional per-service data path overrides `<SERVICE>_DATA_PATH` (e.g. `POSTGRES_DATA_PATH`), default `$STACK_ROOT/<service>`, to relocate a single service's data (e.g. a database onto a separate disk). Documented as an advanced block in `.env.example`.
 
 ### Changed
 
-- All persistent data moved from Docker named volumes to bind mounts under `$STACK_ROOT/<service>` (`registry`, `portainer`, `semaphore`, `duplicati`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql`), so one copy of `$STACK_ROOT` is a full backup. The installer creates each directory only for enabled services and sets ownership where required (pgAdmin `5050:5050`, Semaphore `1001:0`); Windows deploy preserves them across redeploys.
+- All persistent data moved from Docker named volumes to bind mounts under `$STACK_ROOT/<service>` (`registry`, `portainer`, `semaphore`, `duplicati`, `gocron`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql`), so one copy of `$STACK_ROOT` is a full backup. The installer creates each directory only for enabled services and sets ownership where required (pgAdmin `5050:5050`, Semaphore `1001:0`); Windows deploy preserves them across redeploys.
 - NGINX seed page moved from the top-level `public/` to `nginx/public/` so there is a single, clearly named site folder.
+
+## [2.0.0] — 2026-07-10
+
+### Changed
+
+- **License:** MIT replaced by [D-commerce Deployer Source License 1.0](LICENSE). Releases **before 2.0.0** remain under [MIT](LICENSE-MIT.md).
+- Installer version **2.0.0** (`setup-server-stack.sh`).
+
+### Added
+
+- Russian license summary: [docs/LICENSE-SUMMARY-RU.md](docs/LICENSE-SUMMARY-RU.md).
 
 ## [1.1.0] — 2026-06-20
 
