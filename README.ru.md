@@ -77,15 +77,10 @@ Setup Server Stack — **нижний слой** (инфраструктура V
 
 ## Лицензия
 
-**D-commerce Deployer Source License 1.0** — [LICENSE](LICENSE).
-
-- **v2.0.0+** (это дерево): те же условия, что у [Deployer](https://github.com/commercedeployer/deployer) v2; внутреннее использование для **своего** продукта — можно; заработок **через использование Deployer пользователями** (в т.ч. через этот установщик) — только с [коммерческой лицензией](docs/LICENSE-SUMMARY-RU.md).
-- **v1.x и ранее:** [MIT](LICENSE-MIT.md).
-
-См. [CHANGELOG.md](CHANGELOG.md). Кратко: [docs/LICENSE-SUMMARY-RU.md](docs/LICENSE-SUMMARY-RU.md).
+[MIT](LICENSE)
 
 ---
 
 ## Статус
 
-Версия установщика: **2.0.0** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).
+Версия установщика: **1.1.0** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).

@@ -20,17 +20,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - All persistent data moved from Docker named volumes to bind mounts under `$STACK_ROOT/<service>` (`registry`, `portainer`, `semaphore`, `duplicati`, `gocron`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql`), so one copy of `$STACK_ROOT` is a full backup. The installer creates each directory only for enabled services and sets ownership where required (pgAdmin `5050:5050`, Semaphore `1001:0`); Windows deploy preserves them across redeploys.
 - NGINX seed page moved from the top-level `public/` to `nginx/public/` so there is a single, clearly named site folder.
 
-## [2.0.0] — 2026-07-10
-
-### Changed
-
-- **License:** MIT replaced by [D-commerce Deployer Source License 1.0](LICENSE). Releases **before 2.0.0** remain under [MIT](LICENSE-MIT.md).
-- Installer version **2.0.0** (`setup-server-stack.sh`).
-
-### Added
-
-- Russian license summary: [docs/LICENSE-SUMMARY-RU.md](docs/LICENSE-SUMMARY-RU.md).
-
 ## [1.1.0] — 2026-06-20
 
 ### Added

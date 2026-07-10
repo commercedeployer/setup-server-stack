@@ -77,15 +77,10 @@ Empty passwords in `.env` are filled on first run into server **`.secrets`** (ch
 
 ## License
 
-**D-commerce Deployer Source License 1.0** — [LICENSE](LICENSE).
-
-- **v2.0.0+** (this tree): same terms as [Deployer](https://github.com/commercedeployer/deployer) v2; internal use to deliver **your** product is allowed; monetizing **through users' use of Deployer** (including via this installer) requires a [commercial license](docs/LICENSE-SUMMARY-RU.md).
-- **v1.x and earlier:** [MIT](LICENSE-MIT.md).
-
-See [CHANGELOG.md](CHANGELOG.md). Russian summary: [docs/LICENSE-SUMMARY-RU.md](docs/LICENSE-SUMMARY-RU.md).
+[MIT](LICENSE)
 
 ---
 
 ## Status
 
-Installer version: **2.0.0** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).
+Installer version: **1.1.0** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).
