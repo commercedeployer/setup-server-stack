@@ -152,7 +152,7 @@ $script:DeployStagingPath = $stRoot
 $localLeaf = Split-Path -Leaf $CopySourcePath
 
 if ($enableDeployer -and [string]::IsNullOrWhiteSpace($deployerImageFromEnv)) {
-    $deployerImageFromEnv = "commercedeployer/deployer:latest"
+    $deployerImageFromEnv = "ghcr.io/commercedeployer/deployer:latest"
 }
 
 $useIdentity = -not [string]::IsNullOrWhiteSpace($SshIdentityFile)

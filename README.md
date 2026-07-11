@@ -38,7 +38,7 @@ cp .env.example .env
 # TLS default: TRAEFIK_CERT_MODE=auto ($STACK_ROOT/certs/<host> if present, otherwise Let's Encrypt)
 # Static site: ENABLE_NGINX=1 publishes $STACK_ROOT/nginx/public on https://DOMAIN
 # For reinstall-heavy QA: TRAEFIK_CERT_MODE=staging or selfsigned
-# Deployer: ENABLE_DEPLOYER=1 and DEPLOYER_IMAGE=commercedeployer/deployer:latest
+# Deployer: ENABLE_DEPLOYER=1 and DEPLOYER_IMAGE=ghcr.io/commercedeployer/deployer:latest
 chmod +x setup-server-stack.sh install.sh
 sudo bash ./setup-server-stack.sh
 ```
@@ -64,7 +64,7 @@ Re-run after editing `.env`: `sudo bash ./setup-server-stack.sh`.
 
 Setup Server Stack is the **infrastructure layer**:
 
-- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source Docker deploy API; enable with `ENABLE_DEPLOYER=1` and `DEPLOYER_IMAGE` (`commercedeployer/deployer:latest` or `ghcr.io/commercedeployer/deployer:latest`).
+- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source Docker deploy API; `ENABLE_DEPLOYER=1` + `DEPLOYER_IMAGE` (GHCR or Docker Hub — both published by CI).
 - **D-Commerce** — commercial storefront and billing; calls Deployer over HTTP. Stack and Deployer work **without** D-Commerce.
 
 ---

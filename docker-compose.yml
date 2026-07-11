@@ -363,7 +363,7 @@ services:
 
   deployer:
     profiles: [deployer]
-    image: ${DEPLOYER_IMAGE_EFFECTIVE:-${DEPLOYER_IMAGE:-commercedeployer/deployer:latest}}
+    image: ${DEPLOYER_IMAGE_EFFECTIVE:-${DEPLOYER_IMAGE:-ghcr.io/commercedeployer/deployer:latest}}
     container_name: deployer
     restart: unless-stopped
     user: root
@@ -371,11 +371,12 @@ services:
       NODE_ENV: ${DEPLOYER_NODE_ENV:-production}
       ADMIN_USER: ${DEPLOYER_ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${DEPLOYER_ADMIN_PASSWORD:-}
-      SESSION_SECRET: ${DEPLOYER_SESSION_SECRET:-}
+      DEPLOYER_SECRET: ${DEPLOYER_SECRET:-}
       DEPLOYER_PUBLIC_BASE_URL: ${DEPLOYER_PUBLIC_BASE_URL:-https://deployer.${DOMAIN}}
       DEPLOYER_AUTH_MODE: ${DEPLOYER_AUTH_MODE:-dual}
       PORT: 3000
       DEPLOY_BASE_PATH: ${DEPLOY_BASE_PATH:-/opt/deploy-data}
+      TEMPLATES_DIR: /app/templates
       DEFAULT_PULL_POLICY: ${DEPLOYER_DEFAULT_PULL_POLICY:-always}
       PULL_MAX_ATTEMPTS: ${DEPLOYER_PULL_MAX_ATTEMPTS:-3}
       CONTAINER_LIMIT: ${DEPLOYER_CONTAINER_LIMIT:-0}
@@ -393,6 +394,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DEPLOY_BASE_PATH:-/opt/deploy-data}:${DEPLOY_BASE_PATH:-/opt/deploy-data}
+      - ${DEPLOY_BASE_PATH:-/opt/deploy-data}/templates:/app/templates
     labels:
       - traefik.enable=true
       - traefik.docker.network=proxynet

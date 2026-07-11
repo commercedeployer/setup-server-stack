@@ -281,6 +281,9 @@ ensure_dirs() {
   ensure_filebrowser_root_dir
   ensure_service_data_dirs
   RUN mkdir -p "${DEPLOY_BASE_PATH:-/opt/deploy-data}"
+  if [[ "${ENABLE_DEPLOYER:-0}" == "1" ]]; then
+    RUN mkdir -p "${DEPLOY_BASE_PATH:-/opt/deploy-data}/templates"
+  fi
   chmod 700 "$STACK_ROOT/certs" 2>/dev/null || true
 }
 
@@ -824,13 +827,13 @@ write_stack_secrets() {
         changed=1
       fi
     fi
-    if [[ -z "${DEPLOYER_SESSION_SECRET:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
-      if ! grep -q '^DEPLOYER_SESSION_SECRET=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+    if [[ -z "${DEPLOYER_SECRET:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+      if ! grep -q '^DEPLOYER_SECRET=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
         local dss
         dss=$(rand_hex 32)
-        grep -v '^DEPLOYER_SESSION_SECRET=' "$sec" >"${sec}.tmp" 2>/dev/null || true
+        grep -v '^DEPLOYER_SECRET=' "$sec" >"${sec}.tmp" 2>/dev/null || true
         mv "${sec}.tmp" "$sec" 2>/dev/null || true
-        echo "DEPLOYER_SESSION_SECRET=$dss" >>"$sec"
+        echo "DEPLOYER_SECRET=$dss" >>"$sec"
         changed=1
       fi
     fi
@@ -1339,7 +1342,7 @@ write_env_for_compose() {
   : "${MONGO_EXPRESS_IMAGE:=mongo-express:latest}"
   : "${PGADMIN_IMAGE:=dpage/pgadmin4:latest}"
   : "${ADMINER_IMAGE:=adminer:latest}"
-  : "${DEPLOYER_IMAGE:=commercedeployer/deployer:latest}"
+  : "${DEPLOYER_IMAGE:=ghcr.io/commercedeployer/deployer:latest}"
   : "${DEPLOYER_IMAGE_EFFECTIVE:=${DEPLOYER_IMAGE}}"
   : "${DEPLOYER_NODE_ENV:=production}"
   : "${DEPLOYER_AUTH_MODE:=dual}"
@@ -1394,7 +1397,7 @@ write_env_for_compose() {
   bzsys="$(quote_for_env_stack "${BESZEL_SYSTEM_NAME:-}")"
   deployer_auth_mode="$(resolve_deployer_auth_mode)"
   dap="$(quote_for_env_stack "${DEPLOYER_ADMIN_PASSWORD:-}")"
-  dss="$(quote_for_env_stack "${DEPLOYER_SESSION_SECRET:-}")"
+  dss="$(quote_for_env_stack "${DEPLOYER_SECRET:-}")"
   dapi="$(quote_for_env_stack "${DEPLOYER_API_KEY:-}")"
   drp="$(quote_for_env_stack "${DEPLOYER_REGISTRY_PASSWORD:-}")"
   drcj="$(quote_for_env_stack "${DEPLOYER_REGISTRY_CREDENTIALS_JSON:-[]}")"
@@ -1497,7 +1500,7 @@ write_env_for_compose() {
     echo "DEPLOYER_AUTH_MODE=$deployer_auth_mode"
     echo "DEPLOYER_ADMIN_USER=$DEPLOYER_ADMIN_USER"
     echo "DEPLOYER_ADMIN_PASSWORD=\"$dap\""
-    echo "DEPLOYER_SESSION_SECRET=\"$dss\""
+    echo "DEPLOYER_SECRET=\"$dss\""
     echo "DEPLOY_BASE_PATH=$DEPLOY_BASE_PATH"
     echo "DEPLOYER_DEFAULT_PULL_POLICY=$DEPLOYER_DEFAULT_PULL_POLICY"
     echo "DEPLOYER_PULL_MAX_ATTEMPTS=$DEPLOYER_PULL_MAX_ATTEMPTS"
@@ -1690,7 +1693,7 @@ push_registry_seed_images() {
 
 prepare_deployer_image() {
   [[ "${ENABLE_DEPLOYER:-0}" == "1" ]] || return 0
-  local deployer_image="${DEPLOYER_IMAGE:-commercedeployer/deployer:latest}"
+  local deployer_image="${DEPLOYER_IMAGE:-ghcr.io/commercedeployer/deployer:latest}"
 
   step "Deployer: pull image $deployer_image"
   local retries="${REGISTRY_OPERATION_RETRIES:-3}"

@@ -347,33 +347,33 @@ Logins run at install; credentials go to `config/docker/config.json` (Watchtower
 
 ### Deployer
 
-Deployer is a **separate** open-source product ([github.com/commercedeployer/deployer](https://github.com/commercedeployer/deployer)). Its image is built by CI and published to **Docker Hub** and **GHCR** — the stack only **pulls** it, like Traefik or Portainer.
+Deployer is a **separate** open-source product ([github.com/commercedeployer/deployer](https://github.com/commercedeployer/deployer)). **GitHub CI** (`publish-image.yml`, tag `v*`) runs **two jobs:** GHCR and Docker Hub. The stack only **pulls** a published image. Do **not** build or push Deployer images manually.
 
-**Published images (public):**
+**Images after CI (public):**
 
-| Registry | `DEPLOYER_IMAGE` | Verify before install |
-|----------|------------------|------------------------|
-| Docker Hub (recommended) | `commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
+| Registry | `DEPLOYER_IMAGE` | Verify |
+|----------|------------------|--------|
 | GHCR | `ghcr.io/commercedeployer/deployer:latest` | `docker pull ghcr.io/commercedeployer/deployer:latest` |
+| Docker Hub | `commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
 
 ```env
 ENABLE_DEPLOYER=1
-DEPLOYER_IMAGE=commercedeployer/deployer:latest
+DEPLOYER_IMAGE=ghcr.io/commercedeployer/deployer:latest
 ```
 
-Docker Hub: [hub.docker.com/r/commercedeployer/deployer](https://hub.docker.com/r/commercedeployer/deployer). GHCR uses the same org: `ghcr.io/commercedeployer/deployer`.
+Use either GHCR or Docker Hub on the VPS (both are published by CI). Prefer a release tag (e.g. `:v2.0.1`) over `:latest` in production.
 
-Replace `:latest` with a release tag (e.g. `:v1.2.0`) in production. For a **private** image, set `DEPLOYER_IMAGE_REGISTRY_HOST`, `DEPLOYER_IMAGE_REGISTRY_USER`, and `DEPLOYER_IMAGE_REGISTRY_PASSWORD` before install.
-
-When the stack registry is enabled, Deployer uses `registry.${DOMAIN}` to deploy application images.
+When the stack registry is enabled, Deployer uses `registry.${DOMAIN}` for **application** images from deploy templates (not the Deployer image itself).
 
 Pull policy inside Deployer (for app images): `DEPLOYER_DEFAULT_PULL_POLICY=always` | `ifNotPresent` with retries (`DEPLOYER_PULL_MAX_ATTEMPTS`).
 
 **Provision tools** (inside the Deployer **container**, not on Ubuntu): `DEPLOYER_SOFTWARE` in `.env` — comma-separated keys, default `bash,curl`. `node` is always present. For Postgres tenant templates (`umami-pg`) add `psql`, e.g. `bash,curl,psql`. Full list in `.env.example` § Deployer.
 
-**MCP / Cursor:** issue keys in Deployer UI (**MCP / AI**). `DEPLOYER_PUBLIC_BASE_URL` defaults to `https://deployer.${DOMAIN}` in compose (override in `.env` if needed). Key hashes use `DEPLOYER_SESSION_SECRET` — no separate MCP pepper or enable flag. Optional **`DEPLOYER_MCP_TOOLS_DENY`** — comma-separated MCP tool names to block on this host.
+**MCP / Cursor:** issue keys in Deployer UI (**MCP / AI**). `DEPLOYER_PUBLIC_BASE_URL` defaults to `https://deployer.${DOMAIN}` in compose (override in `.env` if needed). Key hashes use `DEPLOYER_SECRET` — no separate MCP pepper or enable flag. Optional **`DEPLOYER_MCP_TOOLS_DENY`** — comma-separated MCP tool names to block on this host.
 
 **Multi-node deployer pools** use `volume_policy: replicate` by default in Commerce: each node keeps local data under `DEPLOY_BASE_PATH`; Commerce orchestrates `POST /api/volumes/:name/sync` between deployer nodes (bytes never pass through Commerce).
+
+**Template JSON** persists on the host at `${DEPLOY_BASE_PATH}/templates` (bind mount → `/app/templates` in the container). On first start with an empty folder, Deployer seeds bundled templates from the image; your edits and custom templates survive image updates. Before enabling the mount on an existing server, copy templates out of the running container once (see §11).
 
 ### Duplicati (backups)
 
@@ -455,6 +455,8 @@ Already issued certificates stay in `${STACK_ROOT}/traefik/acme.json`; do not ru
 | `${STACK_ROOT}/nginx/public/` | Static site files served by NGINX when `ENABLE_NGINX=1` |
 | `${STACK_ROOT}/config/traefik/htpasswd*` | Basic Auth for Traefik / Doku |
 | `${STACK_ROOT}/config/pgadmin/` | pgAdmin auto-connect (if enabled) |
+| `${DEPLOY_BASE_PATH}/` | Deployer container data (bind mount when Deployer enabled; default `/opt/deploy-data`) |
+| `${DEPLOY_BASE_PATH}/templates/` | Deployer template JSON (survives image updates; empty dir → seed from image on start) |
 | `${STACK_ROOT}/<service>/` | Per-service persistent data (bind mounts): `registry`, `portainer`, `semaphore`, `duplicati`, `gocron`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql` |
 
 All persistent state lives under `${STACK_ROOT}` as bind mounts (no Docker named volumes), so a single copy of `${STACK_ROOT}` is a full backup of the stack. The installer creates each `${STACK_ROOT}/<service>` only for enabled services and sets ownership where needed (pgAdmin `5050:5050`, Semaphore `1001:0`). To relocate one service's data (e.g. a database onto a separate disk), set `<SERVICE>_DATA_PATH` in `.env` (see `.env.example` section `[M]`); a path outside `${STACK_ROOT}` still works and is left untouched by the Windows deploy (it only writes inside `${STACK_ROOT}`), but it is not included when you back up by copying `${STACK_ROOT}` — back such a path up separately.

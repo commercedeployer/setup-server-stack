@@ -38,7 +38,7 @@ cp .env.example .env
 # TLS по умолчанию: TRAEFIK_CERT_MODE=auto ($STACK_ROOT/certs/<host>, если есть; иначе Let's Encrypt)
 # Статический сайт: ENABLE_NGINX=1 публикует $STACK_ROOT/nginx/public на https://DOMAIN
 # Для частых QA-переустановок: TRAEFIK_CERT_MODE=staging или selfsigned
-# Deployer: ENABLE_DEPLOYER=1 и DEPLOYER_IMAGE=commercedeployer/deployer:latest
+# Deployer: ENABLE_DEPLOYER=1 и DEPLOYER_IMAGE=ghcr.io/commercedeployer/deployer:latest
 chmod +x setup-server-stack.sh install.sh
 sudo bash ./setup-server-stack.sh
 ```
@@ -64,7 +64,7 @@ sudo bash ./setup-server-stack.sh
 
 Setup Server Stack — **нижний слой** (инфраструктура VPS):
 
-- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` и `DEPLOYER_IMAGE` (`commercedeployer/deployer:latest` или `ghcr.io/commercedeployer/deployer:latest`).
+- **[Deployer](https://github.com/commercedeployer/deployer)** — open-source API и шаблоны Docker; `ENABLE_DEPLOYER=1` + `DEPLOYER_IMAGE` (GHCR или Docker Hub — оба публикует CI).
 - **D-Commerce** — коммерческая витрина и биллинг; на проде вызывает Deployer по HTTP. Stack и Deployer работают **без** D-Commerce.
 
 ---

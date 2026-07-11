@@ -408,31 +408,31 @@ EXTRA_REGISTRY_2_PASSWORD=token2
 
 ### Deployer
 
-Deployer — **отдельный** open-source продукт ([github.com/commercedeployer/deployer](https://github.com/commercedeployer/deployer)). Образ собирается CI и публикуется в **Docker Hub** и **GHCR** — стек только **скачивает** его, как Traefik или Portainer.
+Deployer — **отдельный** open-source продукт ([github.com/commercedeployer/deployer](https://github.com/commercedeployer/deployer)). Образ собирает **CI на GitHub** (`publish-image.yml`, тег `v*`) — **два job:** GHCR и Docker Hub. Стек только **скачивает** готовый образ. **Не** собирать и **не** пушить образ Deployer руками.
 
-**Опубликованные образы (public):**
+**Образы после CI (public):**
 
-| Registry | `DEPLOYER_IMAGE` | Проверка до установки |
-|----------|------------------|------------------------|
-| Docker Hub (рекомендуется) | `commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
+| Registry | `DEPLOYER_IMAGE` | Проверка |
+|----------|------------------|----------|
 | GHCR | `ghcr.io/commercedeployer/deployer:latest` | `docker pull ghcr.io/commercedeployer/deployer:latest` |
+| Docker Hub | `commercedeployer/deployer:latest` | `docker pull commercedeployer/deployer:latest` |
 
 ```env
 ENABLE_DEPLOYER=1
-DEPLOYER_IMAGE=commercedeployer/deployer:latest
+DEPLOYER_IMAGE=ghcr.io/commercedeployer/deployer:latest
 ```
 
-Страница на Hub: [hub.docker.com/r/commercedeployer/deployer](https://hub.docker.com/r/commercedeployer/deployer). На GHCR тот же org: `ghcr.io/commercedeployer/deployer`.
+(`ghcr.io/...` или `commercedeployer/deployer:latest` — что используете на VPS; оба публикует CI.) В проде вместо `:latest` — тег релиза (например `:v2.0.1`).
 
-В проде вместо `:latest` укажите тег релиза (например `:v1.2.0`). Для **приватного** образа задайте `DEPLOYER_IMAGE_REGISTRY_HOST`, `DEPLOYER_IMAGE_REGISTRY_USER`, `DEPLOYER_IMAGE_REGISTRY_PASSWORD` до установки.
-
-При включённом registry стека Deployer использует `registry.${DOMAIN}` для образов приложений.
+При включённом registry стека Deployer использует `registry.${DOMAIN}` для образов **приложений** из шаблонов деплоя (не для самого образа Deployer).
 
 Политика pull внутри Deployer (для образов приложений): `DEPLOYER_DEFAULT_PULL_POLICY=always` | `ifNotPresent`, попытки — `DEPLOYER_PULL_MAX_ATTEMPTS`.
 
 **Утилиты provision** (внутри **контейнера** Deployer, не на Ubuntu): `DEPLOYER_SOFTWARE` в `.env` — ключи через запятую, по умолчанию `bash,curl`. `node` всегда есть. Для Postgres tenant (`umami-pg`) добавьте `psql`, например `bash,curl,psql`. Полный список — `.env.example`, блок Deployer.
 
-**MCP / Cursor:** ключи выпускаются в UI Deployer (**MCP / AI**). `DEPLOYER_PUBLIC_BASE_URL` в compose по умолчанию `https://deployer.${DOMAIN}` (переопределите в `.env` при необходимости). Hash ключей — `DEPLOYER_SESSION_SECRET`; отдельного pepper и флага «включить MCP» нет. Опционально **`DEPLOYER_MCP_TOOLS_DENY`** — имена MCP-tools через запятую, которые не попадут агенту.
+**MCP / Cursor:** ключи выпускаются в UI Deployer (**MCP / AI**). `DEPLOYER_PUBLIC_BASE_URL` в compose по умолчанию `https://deployer.${DOMAIN}` (переопределите в `.env` при необходимости). Hash ключей — `DEPLOYER_SECRET`; отдельного pepper и флага «включить MCP» нет. Опционально **`DEPLOYER_MCP_TOOLS_DENY`** — имена MCP-tools через запятую, которые не попадут агенту.
+
+**Шаблоны (template JSON)** хранятся на хосте в `${DEPLOY_BASE_PATH}/templates` (bind mount → `/app/templates` в контейнере). Пустая папка при первом старте — Deployer копирует bundled из образа; правки и свои шаблоны переживают обновление образа. На уже работающем сервере перед включением mount один раз скопируйте шаблоны из контейнера (см. §11).
 
 ### Duplicati (бэкапы)
 
