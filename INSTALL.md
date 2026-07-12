@@ -457,6 +457,7 @@ Already issued certificates stay in `${STACK_ROOT}/traefik/acme.json`; do not ru
 | `${STACK_ROOT}/config/pgadmin/` | pgAdmin auto-connect (if enabled) |
 | `${DEPLOY_BASE_PATH}/` | Deployer container data (bind mount when Deployer enabled; default `/opt/deploy-data`) |
 | `${DEPLOY_BASE_PATH}/templates/` | Deployer template JSON (survives image updates; empty dir → seed from image on start) |
+| `${DEPLOY_BASE_PATH}/secrets.json` | Deployer **Vault** (Сейф): shared infra secrets for `{{KEY}}` in templates; fill via UI or file on host (chmod 600) |
 | `${STACK_ROOT}/<service>/` | Per-service persistent data (bind mounts): `registry`, `portainer`, `semaphore`, `duplicati`, `gocron`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql` |
 
 All persistent state lives under `${STACK_ROOT}` as bind mounts (no Docker named volumes), so a single copy of `${STACK_ROOT}` is a full backup of the stack. The installer creates each `${STACK_ROOT}/<service>` only for enabled services and sets ownership where needed (pgAdmin `5050:5050`, Semaphore `1001:0`). To relocate one service's data (e.g. a database onto a separate disk), set `<SERVICE>_DATA_PATH` in `.env` (see `.env.example` section `[M]`); a path outside `${STACK_ROOT}` still works and is left untouched by the Windows deploy (it only writes inside `${STACK_ROOT}`), but it is not included when you back up by copying `${STACK_ROOT}` — back such a path up separately.

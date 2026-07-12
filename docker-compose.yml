@@ -388,8 +388,6 @@ services:
       REGISTRY_CREDENTIALS_JSON: ${DEPLOYER_REGISTRY_CREDENTIALS_JSON:-}
       API_KEY: ${DEPLOYER_API_KEY:-}
       DEPLOYER_SOFTWARE: ${DEPLOYER_SOFTWARE:-bash,curl}
-      POSTGRES_ADMIN_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-postgres}
-      POSTGRES_HOST: postgres
       SHARED_APP_NETWORK: proxynet
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
