@@ -221,6 +221,13 @@ apply_stack_admin_defaults() {
   : "${SEMAPHORE_ADMIN:=$STACK_ADMIN_USER}"
   : "${SEMAPHORE_ADMIN_NAME:=$STACK_ADMIN_USER}"
   : "${SEMAPHORE_ADMIN_EMAIL:=$STACK_ADMIN_EMAIL}"
+  : "${GITEA_ADMIN:=$STACK_ADMIN_USER}"
+  : "${GITEA_ADMIN_EMAIL:=$STACK_ADMIN_EMAIL}"
+  : "${GITEA_HOST:=gitea.${DOMAIN:-example.com}}"
+  : "${GITEA_ROOT_URL:=https://${GITEA_HOST}/}"
+  : "${GITEA_SSH_PORT:=2222}"
+  : "${GITEA_RUNNER_INSTANCE_URL:=${GITEA_ROOT_URL%/}}"
+  : "${GITEA_RUNNER_NAME:=stack-runner}"
   : "${DOKU_DASHBOARD_USER:=$STACK_ADMIN_USER}"
   : "${FILEBROWSER_USER:=$STACK_ADMIN_USER}"
   : "${BESZEL_USER_EMAIL:=$STACK_ADMIN_EMAIL}"
@@ -308,6 +315,7 @@ ensure_service_data_dirs() {
     "gocron:ENABLE_GOCRON" \
     "kuma:ENABLE_UPTIME_KUMA" \
     "beszel:ENABLE_BESZEL" \
+    "gitea:ENABLE_GITEA" \
     "mongo:ENABLE_MONGO" \
     "postgres:ENABLE_POSTGRES" \
     "mariadb:ENABLE_MARIADB" \
@@ -321,6 +329,14 @@ ensure_service_data_dirs() {
     local sema_dir; sema_dir="$(svc_data_path semaphore)"
     mkdir -p "$sema_dir"
     chown -R 1001:0 "$sema_dir" 2>/dev/null || true
+  fi
+  if [[ "${ENABLE_GITEA:-0}" == "1" ]]; then
+    local gitea_dir; gitea_dir="$(svc_data_path gitea)"
+    mkdir -p "$gitea_dir"
+    chown -R "${GITEA_PUID:-1000}:${GITEA_PGID:-1000}" "$gitea_dir" 2>/dev/null || true
+  fi
+  if [[ "${ENABLE_GITEA_RUNNER:-0}" == "1" ]]; then
+    mkdir -p "$(gitea_runner_data_path)"
   fi
   if [[ "${ENABLE_PGADMIN:-0}" == "1" ]]; then
     local pgadmin_dir; pgadmin_dir="$(svc_data_path pgadmin)"
@@ -341,6 +357,10 @@ ensure_service_data_dirs() {
 # the service name contains a hyphen (invalid in a shell variable name).
 beszel_agent_data_path() {
   printf '%s\n' "${BESZEL_AGENT_DATA_PATH:-$STACK_ROOT/beszel-agent}"
+}
+
+gitea_runner_data_path() {
+  printf '%s\n' "${GITEA_RUNNER_DATA_PATH:-$STACK_ROOT/gitea-runner}"
 }
 
 resolve_nginx_host() {
@@ -714,6 +734,19 @@ write_stack_secrets() {
     fi
   fi
 
+  if [[ "${ENABLE_GITEA:-0}" == "1" ]]; then
+    if [[ -z "${GITEA_ADMIN_PASSWORD:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+      if ! grep -q '^GITEA_ADMIN_PASSWORD=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
+        local gp
+        gp=$(rand_hex 16)
+        grep -v '^GITEA_ADMIN_PASSWORD=' "$sec" >"${sec}.tmp" 2>/dev/null || true
+        mv "${sec}.tmp" "$sec" 2>/dev/null || true
+        echo "GITEA_ADMIN_PASSWORD=$gp" >>"$sec"
+        changed=1
+      fi
+    fi
+  fi
+
   if [[ "${ENABLE_MONGO:-0}" == "1" ]]; then
     if [[ -z "${MONGO_ROOT_PASSWORD:-}" ]] || [[ "$FORCE_SECRETS" -eq 1 ]]; then
       if ! grep -q '^MONGO_ROOT_PASSWORD=' "$sec" 2>/dev/null || [[ "$FORCE_SECRETS" -eq 1 ]]; then
@@ -969,7 +1002,7 @@ deployer_software_catalog() {
 
 parse_deployer_software_list() {
   local raw token
-  raw="${DEPLOYER_SOFTWARE:-bash,curl}"
+  raw="${DEPLOYER_SOFTWARE:-bash,curl,psql}"
   raw="$(printf '%s' "$raw" | tr ',;' ' \n' | tr '[:upper:]' '[:lower:]')"
   for token in $raw; do
     token="${token//\'/}"
@@ -1294,6 +1327,109 @@ configure_beszel() {
   info "Beszel: local agent configured; this server should appear in the dashboard within a minute."
 }
 
+# Auto-provision Gitea admin and (optionally) register the local Actions runner.
+# Non-fatal: on failure the stack stays up; finish setup in the Gitea web UI.
+configure_gitea() {
+  [[ "${ENABLE_GITEA:-0}" == "1" ]] || return 0
+  merge_secrets_for_compose
+
+  local user="${GITEA_ADMIN:-${STACK_ADMIN_USER:-admin}}"
+  local email="${GITEA_ADMIN_EMAIL:-${STACK_ADMIN_EMAIL}}"
+  local pass="${GITEA_ADMIN_PASSWORD:-}"
+  local instance="${GITEA_RUNNER_INSTANCE_URL:-https://gitea.${DOMAIN}}"
+  local runner_name="${GITEA_RUNNER_NAME:-stack-runner}"
+  local runner_dir token retries base_delay max_delay i delay
+
+  if [ -z "$pass" ]; then
+    warn "Gitea: GITEA_ADMIN_PASSWORD is empty; skipping auto-provisioning."
+    return 0
+  fi
+
+  step "Gitea: provisioning admin and Actions runner"
+  retries="${REGISTRY_OPERATION_RETRIES:-3}"
+  base_delay="${REGISTRY_RETRY_BACKOFF_BASE_SEC:-2}"
+  max_delay="${REGISTRY_RETRY_BACKOFF_MAX_SEC:-10}"
+
+  for ((i = 1; i <= 20; i++)); do
+    if docker inspect -f '{{.State.Running}}' gitea 2>/dev/null | grep -q '^true$'; then
+      if docker exec gitea test -f /data/gitea/conf/app.ini >/dev/null 2>&1; then
+        break
+      fi
+    fi
+    sleep 3
+  done
+  if ! docker exec gitea test -f /data/gitea/conf/app.ini >/dev/null 2>&1; then
+    warn "Gitea: app.ini not ready; skipping auto-provisioning. Open https://gitea.${DOMAIN} and finish the install wizard."
+    return 0
+  fi
+
+  docker exec -u git gitea gitea migrate >/dev/null 2>&1 || true
+
+  if ! docker exec -u git gitea gitea admin user list 2>/dev/null | grep -qF "$user"; then
+    if ! docker exec -u git gitea gitea admin user create \
+      --admin \
+      --username "$user" \
+      --password "$pass" \
+      --email "$email" \
+      --must-change-password=false >/dev/null 2>&1; then
+      warn "Gitea: could not create admin user ${user}. Finish setup at https://gitea.${DOMAIN}."
+      return 0
+    fi
+    info "Gitea: admin user ${user} created."
+  else
+    docker exec -u git gitea gitea admin user change-password \
+      --username "$user" \
+      --password "$pass" >/dev/null 2>&1 || true
+    info "Gitea: admin user ${user} already exists."
+  fi
+
+  [[ "${ENABLE_GITEA_RUNNER:-0}" == "1" ]] || return 0
+
+  runner_dir="$(gitea_runner_data_path)"
+  if [[ -f "$runner_dir/.runner" ]]; then
+    info "Gitea Actions runner already registered (${runner_name})."
+    return 0
+  fi
+
+  token="${GITEA_RUNNER_REGISTRATION_TOKEN:-}"
+  if [ -z "$token" ]; then
+    for ((i = 1; i <= retries; i++)); do
+      token=$(docker exec -u git gitea gitea actions generate-runner-token 2>/dev/null | tr -d '\r\n' || true)
+      [ -n "$token" ] && break
+      delay=$((base_delay * (2 ** (i - 1))))
+      (( delay > max_delay )) && delay="$max_delay"
+      sleep "$delay"
+    done
+  fi
+  if [ -z "$token" ]; then
+    warn "Gitea: could not obtain an Actions runner registration token. Register manually: Site Administration → Actions → Runners."
+    return 0
+  fi
+
+  if ! docker inspect -f '{{.State.Running}}' gitea-runner 2>/dev/null | grep -q '^true$'; then
+    GITEA_RUNNER_REGISTRATION_TOKEN="$token" \
+      docker compose --env-file "$STACK_ROOT/.env.stack" -f "$SCRIPT_DIR/docker-compose.yml" up -d gitea-runner >/dev/null 2>&1 || true
+    sleep 5
+  fi
+
+  for ((i = 1; i <= retries; i++)); do
+    if docker exec gitea-runner act_runner register \
+      --no-interactive \
+      --instance "$instance" \
+      --token "$token" \
+      --name "$runner_name" >/dev/null 2>&1; then
+      docker restart gitea-runner >/dev/null 2>&1 || true
+      info "Gitea Actions runner registered as ${runner_name}."
+      return 0
+    fi
+    delay=$((base_delay * (2 ** (i - 1))))
+    (( delay > max_delay )) && delay="$max_delay"
+    sleep "$delay"
+  done
+
+  warn "Gitea: runner registration failed. Set GITEA_RUNNER_REGISTRATION_TOKEN in .env (from Gitea UI) and re-run setup-server-stack.sh."
+}
+
 resolve_adminer_default_server() {
   if [[ -n "${ADMINER_DEFAULT_SERVER:-}" ]]; then
     echo "$ADMINER_DEFAULT_SERVER"
@@ -1322,6 +1458,16 @@ write_env_for_compose() {
   : "${PORTAINER_IMAGE:=portainer/portainer-ce:latest}"
   : "${WATCHTOWER_IMAGE:=nickfedor/watchtower:latest}"
   : "${SEMAPHORE_IMAGE:=semaphoreui/semaphore:latest}"
+  : "${GITEA_IMAGE:=gitea/gitea:1.23}"
+  : "${GITEA_RUNNER_IMAGE:=gitea/act_runner:0.2.11}"
+  : "${GITEA_PUID:=1000}"
+  : "${GITEA_PGID:=1000}"
+  : "${GITEA_DB_TYPE:=sqlite3}"
+  : "${GITEA_HOST:=gitea.${DOMAIN}}"
+  : "${GITEA_ROOT_URL:=https://gitea.${DOMAIN}/}"
+  : "${GITEA_SSH_PORT:=2222}"
+  : "${GITEA_RUNNER_INSTANCE_URL:=https://gitea.${DOMAIN}}"
+  : "${GITEA_RUNNER_NAME:=stack-runner}"
   : "${DOKU_IMAGE:=amerkurev/doku:latest}"
   : "${DUPLICATI_IMAGE:=linuxserver/duplicati:latest}"
   : "${GOCRON_IMAGE:=ghcr.io/flohoss/gocron:latest}"
@@ -1372,7 +1518,7 @@ write_env_for_compose() {
   export COMPOSE_PROFILES
 
   local env_out="$STACK_ROOT/.env.stack"
-  local rp sp sk dwp dsek mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr fbp nginx_host deployer_auth_mode dap dss dapi drp drcj rpp bzp bzapp bzsys
+  local rp sp sk dwp dsek mp pp mrp mdp myrp mydp mep pgp adminer_srv fbr fbp nginx_host deployer_auth_mode dap dss dapi drp drcj rpp bzp bzapp bzsys gap grt gitea_root_url gitea_runner_url
   rp="$(quote_for_env_stack "${REGISTRY_PASSWORD:-}")"
   rpp="$(quote_for_env_stack "${REGISTRY_PULL_PASSWORD:-}")"
   sp="$(quote_for_env_stack "${SEMAPHORE_ADMIN_PASSWORD:-}")"
@@ -1395,6 +1541,10 @@ write_env_for_compose() {
   bzp="$(quote_for_env_stack "${BESZEL_USER_PASSWORD:-}")"
   bzapp="$(quote_for_env_stack "${BESZEL_APP_URL}")"
   bzsys="$(quote_for_env_stack "${BESZEL_SYSTEM_NAME:-}")"
+  gap="$(quote_for_env_stack "${GITEA_ADMIN_PASSWORD:-}")"
+  grt="$(quote_for_env_stack "${GITEA_RUNNER_REGISTRATION_TOKEN:-}")"
+  gitea_root_url="$(quote_for_env_stack "${GITEA_ROOT_URL}")"
+  gitea_runner_url="$(quote_for_env_stack "${GITEA_RUNNER_INSTANCE_URL}")"
   deployer_auth_mode="$(resolve_deployer_auth_mode)"
   dap="$(quote_for_env_stack "${DEPLOYER_ADMIN_PASSWORD:-}")"
   dss="$(quote_for_env_stack "${DEPLOYER_SECRET:-}")"
@@ -1408,9 +1558,11 @@ write_env_for_compose() {
   p_duplicati="$(quote_for_env_stack "$(svc_data_path duplicati)")"
   p_gocron="$(quote_for_env_stack "$(svc_data_path gocron)")"
   p_kuma="$(quote_for_env_stack "$(svc_data_path kuma)")"
-  local p_beszel p_beszel_agent
+  local p_beszel p_beszel_agent p_gitea p_gitea_runner
   p_beszel="$(quote_for_env_stack "$(svc_data_path beszel)")"
   p_beszel_agent="$(quote_for_env_stack "$(beszel_agent_data_path)")"
+  p_gitea="$(quote_for_env_stack "$(svc_data_path gitea)")"
+  p_gitea_runner="$(quote_for_env_stack "$(gitea_runner_data_path)")"
   p_pgadmin="$(quote_for_env_stack "$(svc_data_path pgadmin)")"
   p_postgres="$(quote_for_env_stack "$(svc_data_path postgres)")"
   p_mongo="$(quote_for_env_stack "$(svc_data_path mongo)")"
@@ -1429,6 +1581,8 @@ write_env_for_compose() {
     echo "KUMA_DATA_PATH=$p_kuma"
     echo "BESZEL_DATA_PATH=$p_beszel"
     echo "BESZEL_AGENT_DATA_PATH=$p_beszel_agent"
+    echo "GITEA_DATA_PATH=$p_gitea"
+    echo "GITEA_RUNNER_DATA_PATH=$p_gitea_runner"
     echo "PGADMIN_DATA_PATH=$p_pgadmin"
     echo "POSTGRES_DATA_PATH=$p_postgres"
     echo "MONGO_DATA_PATH=$p_mongo"
@@ -1451,6 +1605,8 @@ write_env_for_compose() {
     echo "PORTAINER_IMAGE=$PORTAINER_IMAGE"
     echo "WATCHTOWER_IMAGE=$WATCHTOWER_IMAGE"
     echo "SEMAPHORE_IMAGE=$SEMAPHORE_IMAGE"
+    echo "GITEA_IMAGE=$GITEA_IMAGE"
+    echo "GITEA_RUNNER_IMAGE=$GITEA_RUNNER_IMAGE"
     echo "DOKU_IMAGE=$DOKU_IMAGE"
     echo "DUPLICATI_IMAGE=$DUPLICATI_IMAGE"
     echo "GOCRON_IMAGE=$GOCRON_IMAGE"
@@ -1477,6 +1633,20 @@ write_env_for_compose() {
     echo "ENABLE_DOKU=${ENABLE_DOKU:-0}"
     echo "ENABLE_WATCHTOWER=${ENABLE_WATCHTOWER:-0}"
     echo "ENABLE_SEMAPHORE=${ENABLE_SEMAPHORE:-0}"
+    echo "ENABLE_GITEA=${ENABLE_GITEA:-0}"
+    echo "ENABLE_GITEA_RUNNER=${ENABLE_GITEA_RUNNER:-0}"
+    echo "GITEA_HOST=${GITEA_HOST:-gitea.${DOMAIN}}"
+    echo "GITEA_ROOT_URL=$gitea_root_url"
+    echo "GITEA_SSH_PORT=${GITEA_SSH_PORT:-2222}"
+    echo "GITEA_PUID=${GITEA_PUID:-1000}"
+    echo "GITEA_PGID=${GITEA_PGID:-1000}"
+    echo "GITEA_DB_TYPE=${GITEA_DB_TYPE:-sqlite3}"
+    echo "GITEA_ADMIN=${GITEA_ADMIN:-${STACK_ADMIN_USER:-admin}}"
+    echo "GITEA_ADMIN_EMAIL=${GITEA_ADMIN_EMAIL:-${STACK_ADMIN_EMAIL}}"
+    echo "GITEA_ADMIN_PASSWORD=\"$gap\""
+    echo "GITEA_RUNNER_INSTANCE_URL=$gitea_runner_url"
+    echo "GITEA_RUNNER_NAME=${GITEA_RUNNER_NAME:-stack-runner}"
+    echo "GITEA_RUNNER_REGISTRATION_TOKEN=\"$grt\""
     echo "ENABLE_DUPLICATI=${ENABLE_DUPLICATI:-0}"
     echo "ENABLE_GOCRON=${ENABLE_GOCRON:-0}"
     echo "GOCRON_SOFTWARE=${GOCRON_SOFTWARE:-rsync}"
@@ -1512,7 +1682,7 @@ write_env_for_compose() {
     echo "DEPLOYER_REGISTRY_PASSWORD=\"$drp\""
     echo "DEPLOYER_REGISTRY_CREDENTIALS_JSON=\"$drcj\""
     echo "DEPLOYER_API_KEY=\"$dapi\""
-    echo "DEPLOYER_SOFTWARE=${DEPLOYER_SOFTWARE:-bash,curl}"
+    echo "DEPLOYER_SOFTWARE=${DEPLOYER_SOFTWARE:-bash,curl,psql}"
     echo "REGISTRY_AUTH_TOKEN_ISSUER=${REGISTRY_AUTH_TOKEN_ISSUER}"
     echo "REGISTRY_USER=${REGISTRY_USER}"
     echo "REGISTRY_PASSWORD=\"$rp\""
@@ -1922,6 +2092,7 @@ validate_traefik_required() {
   [[ "${ENABLE_PORTAINER:-0}" == "1" ]] && need+=(ENABLE_PORTAINER)
   [[ "${ENABLE_DOKU:-0}" == "1" ]] && need+=(ENABLE_DOKU)
   [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]] && need+=(ENABLE_SEMAPHORE)
+  [[ "${ENABLE_GITEA:-0}" == "1" ]] && need+=(ENABLE_GITEA)
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && need+=(ENABLE_DUPLICATI)
   [[ "${ENABLE_GOCRON:-0}" == "1" ]] && need+=(ENABLE_GOCRON)
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && need+=(ENABLE_UPTIME_KUMA)
@@ -1946,6 +2117,8 @@ validate_enable_flags() {
   ENABLE_DOKU="${ENABLE_DOKU:-0}"
   ENABLE_WATCHTOWER="${ENABLE_WATCHTOWER:-0}"
   ENABLE_SEMAPHORE="${ENABLE_SEMAPHORE:-0}"
+  ENABLE_GITEA="${ENABLE_GITEA:-0}"
+  ENABLE_GITEA_RUNNER="${ENABLE_GITEA_RUNNER:-${ENABLE_GITEA}}"
   ENABLE_DUPLICATI="${ENABLE_DUPLICATI:-0}"
   ENABLE_GOCRON="${ENABLE_GOCRON:-0}"
   ENABLE_UPTIME_KUMA="${ENABLE_UPTIME_KUMA:-0}"
@@ -1997,6 +2170,7 @@ validate_enable_flags() {
     [[ "$REGISTRY_PULL_USER" != "$REGISTRY_USER" ]] || die "REGISTRY_PULL_USER must differ from REGISTRY_USER ($REGISTRY_USER)."
   fi
   [[ "${ENABLE_BESZEL_AGENT:-0}" != "1" ]] || [[ "${ENABLE_BESZEL:-0}" == "1" ]] || die "ENABLE_BESZEL_AGENT=1 requires ENABLE_BESZEL=1 (the local agent self-registers with the local hub)."
+  [[ "${ENABLE_GITEA_RUNNER:-0}" != "1" ]] || [[ "${ENABLE_GITEA:-0}" == "1" ]] || die "ENABLE_GITEA_RUNNER=1 requires ENABLE_GITEA=1 (the local runner registers with the local Gitea hub)."
   [[ "${ENABLE_MONGO_EXPRESS:-0}" != "1" ]] || [[ "${ENABLE_MONGO:-0}" == "1" ]] || die "ENABLE_MONGO_EXPRESS=1 requires ENABLE_MONGO=1"
   [[ "${ENABLE_PGADMIN:-0}" != "1" ]] || [[ "${ENABLE_POSTGRES:-0}" == "1" ]] || die "ENABLE_PGADMIN=1 requires ENABLE_POSTGRES=1"
   # MariaDB/MySQL create an app user only with a database to grant on; a user
@@ -2038,6 +2212,8 @@ compose_profiles() {
   [[ "${ENABLE_DOKU:-0}" == "1" ]] && p="${p},doku"
   [[ "${ENABLE_WATCHTOWER:-0}" == "1" ]] && p="${p},watchtower"
   [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]] && p="${p},semaphore"
+  [[ "${ENABLE_GITEA:-0}" == "1" ]] && p="${p},gitea"
+  [[ "${ENABLE_GITEA_RUNNER:-0}" == "1" ]] && p="${p},gitea-runner"
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && p="${p},duplicati"
   [[ "${ENABLE_GOCRON:-0}" == "1" ]] && p="${p},gocron"
   [[ "${ENABLE_UPTIME_KUMA:-0}" == "1" ]] && p="${p},kuma"
@@ -2184,8 +2360,11 @@ ufw_apply_rules() {
     RUN ufw default allow outgoing &&
     RUN ufw allow "${ssh_port}/tcp" comment 'SSH' &&
     RUN ufw allow 80/tcp comment 'HTTP' &&
-    RUN ufw allow 443/tcp comment 'HTTPS' &&
-    RUN ufw --force enable
+    RUN ufw allow 443/tcp comment 'HTTPS'
+  if [[ "${ENABLE_GITEA:-0}" == "1" ]]; then
+    RUN ufw allow "${GITEA_SSH_PORT:-2222}/tcp" comment 'Gitea SSH'
+  fi
+  RUN ufw --force enable
 }
 
 setup_ufw() {
@@ -2199,7 +2378,11 @@ setup_ufw() {
     retry_run "$retries" env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y -qq ufw
   fi
   if ufw_apply_rules; then
-    info "UFW: ports ${ssh_port}, 80, 443."
+    if [[ "${ENABLE_GITEA:-0}" == "1" ]]; then
+      info "UFW: ports ${ssh_port}, 80, 443, ${GITEA_SSH_PORT:-2222} (Gitea SSH)."
+    else
+      info "UFW: ports ${ssh_port}, 80, 443."
+    fi
     return 0
   fi
   warn "UFW: iptables-restore failed, trying iptables-legacy..."
@@ -2233,6 +2416,7 @@ https_service_hosts() {
   fi
   [[ "${ENABLE_PORTAINER:-0}" == "1" ]] && echo "Portainer|portainer.${d}"
   [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]] && echo "Semaphore|semaphore.${d}"
+  [[ "${ENABLE_GITEA:-0}" == "1" ]] && echo "Gitea|${GITEA_HOST:-gitea.${d}}"
   [[ "${ENABLE_DOKU:-0}" == "1" ]] && echo "Doku|doku.${d}"
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && echo "Duplicati|duplicati.${d}"
   [[ "${ENABLE_GOCRON:-0}" == "1" ]] && echo "gocron|gocron.${d}"
@@ -2487,6 +2671,11 @@ print_urls() {
   fi
   [[ "${ENABLE_PORTAINER:-0}" == "1" ]] && echo "  Portainer:   https://portainer.${d}"
   [[ "${ENABLE_SEMAPHORE:-0}" == "1" ]] && echo "  Semaphore:   https://semaphore.${d}"
+  if [[ "${ENABLE_GITEA:-0}" == "1" ]]; then
+    echo "  Gitea:       https://${GITEA_HOST:-gitea.${d}}  (login ${GITEA_ADMIN:-${STACK_ADMIN_USER:-admin}}, password in GITEA_ADMIN_PASSWORD in .secrets)"
+    echo "                 git+ssh: ssh://${GITEA_HOST:-gitea.${d}}:${GITEA_SSH_PORT:-2222}/<owner>/<repo>.git"
+    [[ "${ENABLE_GITEA_RUNNER:-0}" == "1" ]] && echo "                 Actions runner: ${GITEA_RUNNER_NAME:-stack-runner} (auto-registered when possible)"
+  fi
   [[ "${ENABLE_DOKU:-0}" == "1" ]] && echo "  Doku:        https://doku.${d}"
   [[ "${ENABLE_DUPLICATI:-0}" == "1" ]] && echo "  Duplicati:   https://duplicati.${d}"
   [[ "${ENABLE_GOCRON:-0}" == "1" ]] && echo "  gocron:      https://gocron.${d}  (no built-in login — HTTPS edge only; jobs in UI or config.yaml)"
@@ -2583,6 +2772,7 @@ main() {
 
   configure_filebrowser_credentials
   configure_beszel
+  configure_gitea
   diagnose_traefik_tls
   export_production_acme_certificates
   print_urls

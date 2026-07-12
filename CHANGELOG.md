@@ -4,6 +4,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-07-12
+
+### Added
+
+- Optional **Gitea** (`ENABLE_GITEA=1`): self-hosted Git at `https://gitea.${DOMAIN}` behind Traefik, git+ssh on `GITEA_SSH_PORT` (default 2222, UFW rule added). SQLite by default; Actions enabled. Installer creates admin (`GITEA_ADMIN` / `GITEA_ADMIN_PASSWORD` in `.secrets`) and auto-registers local **Actions runner** (`ENABLE_GITEA_RUNNER`, defaults to `ENABLE_GITEA`) with Docker socket access for workflow builds. Data under `$STACK_ROOT/gitea` and `$STACK_ROOT/gitea-runner`.
+- Docs: unified **purpose-first** service tables in README, INSTALL (EN/RU), `.env.example` toggle comments; URL tables include NGINX and DB UIs.
+
 ## [1.2.0] — 2026-07-10
 
 ### Changed
@@ -12,7 +19,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- **`DEPLOYER_SOFTWARE`** — optional Alpine tools inside the Deployer container for provision/deprovision (default `bash,curl`; e.g. add `psql` for `umami-pg`). Passed from `.env` via `deployer/docker/entrypoint.sh`. Documented in INSTALL § Deployer; Commerce/Deployer admin docs cross-link here.
+- **`DEPLOYER_SOFTWARE`** — optional Alpine tools inside the Deployer container for provision/deprovision (default `bash,curl,psql`). Passed from `.env` via `deployer/docker/entrypoint.sh`. Documented in INSTALL § Deployer; Commerce/Deployer admin docs cross-link here.
 - Optional **gocron** cron scheduler (`ENABLE_GOCRON=1`): Traefik at `gocron.${DOMAIN}`, config under `$STACK_ROOT/gocron/config.yaml`. Installer preconfigures `software:` from `GOCRON_SOFTWARE` (default `rsync`; optional restic, rclone, …). Read-only `${STACK_ROOT}:/source/stack` mount for backup jobs. No built-in UI auth — see SECURITY.md. **Documented only in setup-server-stack** (not Commerce/Deployer admin docs).
 - Beszel server monitoring (`ENABLE_BESZEL`): hub behind Traefik at `beszel.${DOMAIN}` with first user auto-created from `BESZEL_USER_EMAIL`/`BESZEL_USER_PASSWORD` (password generated into `.secrets`). A local agent (`ENABLE_BESZEL_AGENT`, defaults to `ENABLE_BESZEL`) is auto-registered to monitor this server out of the box: the installer reads the hub public key and a universal token from the hub API and writes them as the agent's `KEY`/`TOKEN` files, so no manual "Add System" step is needed. The agent connects over WebSocket only (`DISABLE_SSH=true`, no inbound port); the hub is published on loopback (`127.0.0.1:8090`) for local provisioning while public access stays via Traefik. Data lives under `$STACK_ROOT/beszel` and `$STACK_ROOT/beszel-agent`.
 - Optional per-service data path overrides `<SERVICE>_DATA_PATH` (e.g. `POSTGRES_DATA_PATH`), default `$STACK_ROOT/<service>`, to relocate a single service's data (e.g. a database onto a separate disk). Documented as an advanced block in `.env.example`.

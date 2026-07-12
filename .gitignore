@@ -41,6 +41,8 @@ portainer/
 semaphore/
 duplicati/
 gocron/
+gitea/
+gitea-runner/
 kuma/
 pgadmin/
 postgres/

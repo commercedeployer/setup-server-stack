@@ -12,14 +12,26 @@
 
 ## Возможности
 
-| Категория | Сервисы |
-|-----------|---------|
-| Сеть и TLS | Traefik 3.6, свои сертификаты из `certs/<host>/`, Let's Encrypt production/staging, self-signed QA-режим |
-| Образы | Private Docker Registry + Registry auth (`docker_auth` token flow) |
-| Операции | Portainer, Watchtower, Semaphore, Doku, Duplicati, gocron, Uptime Kuma, Beszel (с авто-регистрацией локального агента), Filebrowser, статический сайт NGINX |
-| Деплой приложений | Deployer (опционально, `ENABLE_DEPLOYER=1` + `DEPLOYER_IMAGE`) |
-| Базы данных | MongoDB, PostgreSQL, MariaDB, MySQL (опционально) |
-| Веб-морды БД | mongo-express, pgAdmin (автопривязка к Postgres), Adminer |
+Включение — `ENABLE_*=1` в `.env` (URL и пароли: [INSTALL.ru.md](INSTALL.ru.md)).
+
+| Зачем | Сервис |
+|-------|--------|
+| HTTPS и маршруты `*.ваш-домен` | **Traefik** |
+| Свой `docker push` / `pull` образов | **Registry** + **Registry auth** |
+| Управление контейнерами в браузере | **Portainer** |
+| Ночное обновление образов без ручного pull | **Watchtower** |
+| Ansible-плейбуки и SSH-задачи из веб-UI | **Semaphore** |
+| Git-репозитории, issues и CI в репо (Gitea Actions) | **Gitea** (+ **Actions runner**) |
+| Сколько места занимают тома и образы Docker | **Doku** |
+| Бэкапы в S3, SFTP и т.д. через мастер в UI | **Duplicati** |
+| Cron-задания (rsync, restic, rclone) в YAML | **gocron** |
+| Проверка доступности URL и алерты | **Uptime Kuma** |
+| Графики CPU, RAM, диска этого VPS | **Beszel** (локальный агент авто-регистрируется) |
+| Правка файлов на хосте по HTTPS | **Filebrowser** |
+| Статическая визитка на `https://${DOMAIN}` | **NGINX** |
+| Деплой приложений из JSON-шаблонов | **Deployer** (опционально) |
+| Базы для ваших приложений (порты БД не в интернет) | MongoDB, PostgreSQL, MariaDB, MySQL |
+| Админка БД в браузере | mongo-express, pgAdmin, Adminer |
 
 Порты СУБД **не** публикуются в интернет; доступ — из Docker-сети или через HTTPS-морды (Traefik).
 
@@ -83,4 +95,4 @@ Setup Server Stack — **нижний слой** (инфраструктура V
 
 ## Статус
 
-Версия установщика: **1.2.0** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).
+Версия установщика: **1.2.1** (`setup-server-stack.sh`). См. [CHANGELOG.md](CHANGELOG.md).

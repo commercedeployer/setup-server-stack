@@ -1,4 +1,4 @@
-# Setup Server Stack (Traefik 3.6, Registry + Registry auth, Portainer, Watchtower, Semaphore, Doku, Duplicati, Kuma, Beszel, Filebrowser, NGINX static site).
+# Setup Server Stack (Traefik 3.6, Registry + Registry auth, Portainer, Watchtower, Semaphore, Gitea, Doku, Duplicati, gocron, Kuma, Beszel, Filebrowser, NGINX static site).
 # Optional DBs and DB UIs: use COMPOSE_PROFILES or `docker compose --profile <name>`.
 # Run: sudo bash setup-server-stack.sh — writes $STACK_ROOT/.env.stack for docker compose.
 # All persistent data lives under $STACK_ROOT/<service> (bind mounts), so one folder = full backup.
@@ -173,6 +173,64 @@ services:
       - traefik.http.routers.semaphore.tls=true
       - traefik.http.routers.semaphore.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}
       - traefik.http.services.semaphore.loadbalancer.server.port=3000
+    networks:
+      - proxynet
+
+  # Gitea — self-hosted Git + Issues; Actions enabled. Web UI via Traefik; git+ssh on
+  # host port ${GITEA_SSH_PORT} (UFW opened by installer). SQLite by default under ${GITEA_DATA_PATH}.
+  gitea:
+    profiles: [gitea]
+    image: ${GITEA_IMAGE:-gitea/gitea:1.23}
+    container_name: gitea
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      USER_UID: ${GITEA_PUID:-1000}
+      USER_GID: ${GITEA_PGID:-1000}
+      TZ: ${TZ:-UTC}
+      GITEA__server__DOMAIN: ${GITEA_HOST:-gitea.${DOMAIN}}
+      GITEA__server__SSH_DOMAIN: ${GITEA_HOST:-gitea.${DOMAIN}}
+      GITEA__server__ROOT_URL: ${GITEA_ROOT_URL:-https://gitea.${DOMAIN}/}
+      GITEA__server__SSH_PORT: ${GITEA_SSH_PORT:-2222}
+      GITEA__server__SSH_LISTEN_PORT: 22
+      GITEA__server__START_SSH_SERVER: "true"
+      GITEA__actions__ENABLED: "true"
+      GITEA__database__DB_TYPE: ${GITEA_DB_TYPE:-sqlite3}
+    ports:
+      - "${GITEA_SSH_PORT:-2222}:22"
+    volumes:
+      - ${GITEA_DATA_PATH:-${STACK_ROOT}/gitea}:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxynet
+      - traefik.http.routers.gitea.rule=Host(`${GITEA_HOST:-gitea.${DOMAIN}}`)
+      - traefik.http.routers.gitea.entrypoints=websecure
+      - traefik.http.routers.gitea.tls=true
+      - traefik.http.routers.gitea.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}
+      - traefik.http.services.gitea.loadbalancer.server.port=3000
+    networks:
+      - proxynet
+
+  # Gitea Actions runner — registers with the hub (installer or GITEA_RUNNER_REGISTRATION_TOKEN).
+  # Docker socket is required so workflow jobs can build and run containers.
+  gitea-runner:
+    profiles: [gitea-runner]
+    image: ${GITEA_RUNNER_IMAGE:-gitea/act_runner:0.2.11}
+    container_name: gitea-runner
+    restart: unless-stopped
+    depends_on:
+      - gitea
+    environment:
+      CONFIG_FILE: /data/config.yaml
+      GITEA_INSTANCE_URL: ${GITEA_RUNNER_INSTANCE_URL:-https://gitea.${DOMAIN}}
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_RUNNER_REGISTRATION_TOKEN:-}
+      GITEA_RUNNER_NAME: ${GITEA_RUNNER_NAME:-stack-runner}
+    volumes:
+      - ${GITEA_RUNNER_DATA_PATH:-${STACK_ROOT}/gitea-runner}:/data
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - proxynet
 
@@ -387,8 +445,7 @@ services:
       REGISTRY_PASSWORD: ${REGISTRY_PASSWORD:-}
       REGISTRY_CREDENTIALS_JSON: ${DEPLOYER_REGISTRY_CREDENTIALS_JSON:-}
       API_KEY: ${DEPLOYER_API_KEY:-}
-      DEPLOYER_SOFTWARE: ${DEPLOYER_SOFTWARE:-bash,curl}
-      SHARED_APP_NETWORK: proxynet
+      DEPLOYER_SOFTWARE: ${DEPLOYER_SOFTWARE:-bash,curl,psql}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DEPLOY_BASE_PATH:-/opt/deploy-data}:${DEPLOY_BASE_PATH:-/opt/deploy-data}

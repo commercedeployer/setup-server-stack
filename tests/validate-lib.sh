@@ -459,6 +459,59 @@ expect_ok "profiles: beszel profiles included when enabled" bash -c '
   case ",$p," in *,beszel-agent,*) ;; *) exit 1;; esac
 '
 
+expect_fail "enable: Gitea runner without hub" bash -c '
+  export ENABLE_TRAEFIK=1 DOMAIN=ci.stack.test ACME_EMAIL=ci@stack.test
+  export ENABLE_GITEA=0 ENABLE_GITEA_RUNNER=1
+  export EXTRA_REGISTRY_COUNT=0 REGISTRY_OPERATION_RETRIES=3
+  export REGISTRY_RETRY_BACKOFF_BASE_SEC=2 REGISTRY_RETRY_BACKOFF_MAX_SEC=10
+  export VERSION=ci-test SCRIPT_DIR="'"$ROOT"'"
+  source "'"$LIB"'"
+  validate_enable_flags
+'
+
+expect_ok "enable: Gitea hub and runner" bash -c '
+  export ENABLE_TRAEFIK=1 DOMAIN=ci.stack.test ACME_EMAIL=ci@stack.test
+  export ENABLE_GITEA=1 ENABLE_GITEA_RUNNER=1
+  export EXTRA_REGISTRY_COUNT=0 REGISTRY_OPERATION_RETRIES=3
+  export REGISTRY_RETRY_BACKOFF_BASE_SEC=2 REGISTRY_RETRY_BACKOFF_MAX_SEC=10
+  export VERSION=ci-test SCRIPT_DIR="'"$ROOT"'"
+  source "'"$LIB"'"
+  validate_enable_flags
+'
+
+# shellcheck disable=SC2016
+expect_ok "secrets: gitea admin password is generated and reused" bash -c '
+  set -euo pipefail
+  tmp=/tmp/setup-server-stack-ci-gitea-secrets
+  rm -rf "$tmp"
+  mkdir -p "$tmp/lib"
+  touch "$tmp/lib/docker-install.inc.sh"
+  cat >"$tmp/.env" <<ENV
+ENABLE_GITEA=1
+ENV
+  export SCRIPT_DIR="$tmp" STACK_ROOT="$tmp" VERSION=ci-test
+  source "'"$LIB"'"
+  export ENV_FILE="$tmp/.env"
+  ensure_htpasswd() { :; }
+  write_traefik_htpasswd() { :; }
+  write_doku_htpasswd() { :; }
+  write_stack_secrets >/dev/null
+  grep -Eq "^GITEA_ADMIN_PASSWORD=[0-9a-f]{32}$" "$tmp/.secrets"
+  first="$(grep "^GITEA_ADMIN_PASSWORD=" "$tmp/.secrets")"
+  write_stack_secrets >/dev/null
+  second="$(grep "^GITEA_ADMIN_PASSWORD=" "$tmp/.secrets")"
+  [[ "$first" == "$second" ]]
+'
+
+expect_ok "profiles: gitea profiles included when enabled" bash -c '
+  export ENABLE_GITEA=1 ENABLE_GITEA_RUNNER=1
+  export VERSION=ci-test SCRIPT_DIR="'"$ROOT"'"
+  source "'"$LIB"'"
+  p="$(compose_profiles)"
+  case ",$p," in *,gitea,*) ;; *) exit 1;; esac
+  case ",$p," in *,gitea-runner,*) ;; *) exit 1;; esac
+'
+
 expect_fail "db: MariaDB user without database" bash -c '
   export ENABLE_TRAEFIK=1 DOMAIN=ci.stack.test ACME_EMAIL=ci@stack.test
   export ENABLE_MARIADB=1 MARIADB_USER=app MARIADB_DATABASE=

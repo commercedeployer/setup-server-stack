@@ -12,14 +12,26 @@ Works as a **main** host (Traefik, registry, panels) or a lean **node** via [Com
 
 ## Features
 
-| Category | Services |
-|----------|----------|
-| Network & TLS | Traefik 3.6, custom certs from `certs/<host>/`, Let's Encrypt production/staging, self-signed QA mode |
-| Images | Private Docker Registry + Registry auth (`docker_auth` token flow) |
-| Operations | Portainer, Watchtower, Semaphore, Doku, Duplicati, gocron, Uptime Kuma, Beszel (with auto-registered local agent), Filebrowser, NGINX static site |
-| App deployment | Deployer (optional, `ENABLE_DEPLOYER=1` + `DEPLOYER_IMAGE`) |
-| Databases | MongoDB, PostgreSQL, MariaDB, MySQL (optional) |
-| DB web UIs | mongo-express, pgAdmin (auto-linked to Postgres), Adminer |
+Opt-in via `ENABLE_*=1` in `.env` (see [INSTALL.md](INSTALL.md) for URLs and passwords).
+
+| For you | Service |
+|---------|---------|
+| HTTPS and `*.your-domain` routing | **Traefik** |
+| Private `docker push` / `pull` for images | **Registry** + **Registry auth** |
+| Manage containers in a browser | **Portainer** |
+| Nightly image updates without manual pulls | **Watchtower** |
+| Ansible playbooks and SSH tasks from the web | **Semaphore** |
+| Git repos, issues, and CI in the repo (Gitea Actions) | **Gitea** (+ **Actions runner**) |
+| See Docker disk usage by volume/image | **Doku** |
+| Backups to S3, SFTP, etc. via a web wizard | **Duplicati** |
+| Cron shell jobs (rsync, restic, rclone) in YAML | **gocron** |
+| URL uptime checks and alerts | **Uptime Kuma** |
+| CPU, RAM, disk charts for this VPS | **Beszel** (local agent auto-registered) |
+| Edit files on the host over HTTPS | **Filebrowser** |
+| Static landing page at `https://${DOMAIN}` | **NGINX** |
+| Deploy app containers from JSON templates | **Deployer** (optional) |
+| Databases for your apps (no public DB ports) | MongoDB, PostgreSQL, MariaDB, MySQL |
+| Manage databases in a browser | mongo-express, pgAdmin, Adminer |
 
 Database ports are **not** exposed to the public internet; access is via the Docker network or HTTPS UIs behind Traefik.
 
@@ -83,4 +95,4 @@ Empty passwords in `.env` are filled on first run into server **`.secrets`** (ch
 
 ## Status
 
-Installer version: **1.2.0** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).
+Installer version: **1.2.1** (`setup-server-stack.sh`). See [CHANGELOG.md](CHANGELOG.md).

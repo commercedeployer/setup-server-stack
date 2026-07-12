@@ -21,14 +21,17 @@
 
 ## Веб-панели (край HTTPS)
 
-Панели открываются как `https://<сервис>.${DOMAIN}`. **Traefik Basic Auth** (дополнительный пароль до входа в приложение) включён **только** для:
+Панели открываются как `https://<сервис>.${DOMAIN}` (NGINX — `DOMAIN` или `NGINX_HOST`). Зачем каждый сервис — [INSTALL.ru.md](INSTALL.ru.md) §1; здесь — **как они защищены**.
+
+**Traefik Basic Auth** (дополнительный пароль до входа в приложение) включён **только** для:
 
 - **dashboard Traefik** (`admin` + `TRAEFIK_DASHBOARD_PASSWORD`)
 - **Doku** (`STACK_ADMIN_USER` + `DOKU_DASHBOARD_PASSWORD`; `DOKU_DASHBOARD_USER` может переопределить)
 
 Остальные HTTPS-панели защищены **только логином приложения** (или мастером «первого захода»):
 
-| Логин в приложении | Portainer, Semaphore, Duplicati (`DUPLICATI_WEBSERVICE_PASSWORD`), Uptime Kuma, Beszel (`STACK_ADMIN_EMAIL` + `BESZEL_USER_PASSWORD`), Filebrowser (`STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; `FILEBROWSER_USER` может переопределить), Deployer (если включён), mongo-express, pgAdmin, Adminer |
+| Логин в приложении | Portainer, Semaphore, Gitea (`GITEA_ADMIN` + `GITEA_ADMIN_PASSWORD`), Duplicati (`DUPLICATI_WEBSERVICE_PASSWORD`), Uptime Kuma, Beszel (`STACK_ADMIN_EMAIL` + `BESZEL_USER_PASSWORD`), Filebrowser (`STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; `FILEBROWSER_USER` может переопределить), Deployer (если включён), mongo-express, pgAdmin, Adminer |
+| Повышенный доступ контейнера | **Gitea Actions runner** (`ENABLE_GITEA_RUNNER=1`) монтирует `/var/run/docker.sock`, чтобы workflow мог собирать образы — как CI-воркер с доступом к Docker на хосте |
 | Без логина в приложении | **gocron** (`ENABLE_GOCRON=1`) — любой, кто откроет `https://gocron.${DOMAIN}`, может смотреть и править задания; ограничивайте сетью, VPN или middleware Traefik |
 | Не браузерная панель | Registry (`docker login`), Registry auth (`registry-auth.${DOMAIN}`) |
 
@@ -38,7 +41,7 @@
 - `TRAEFIK_CERT_MODE=auto` может загрузить private keys из `certs/<host>/privkey.pem`; реальные host-папки игнорируются git и должны считаться секретами.
 - `TRAEFIK_CERT_MODE=staging` и `TRAEFIK_CERT_MODE=selfsigned` — QA-режимы. HTTPS-маршрутизация остаётся, но браузер не будет доверять сертификату.
 - **Первый заход** (Portainer, Uptime Kuma): сразу после установки завершите создание админа, пока URL не стал публичным.
-- **Filebrowser** отдаёт только `FILEBROWSER_ROOT_PATH` на хосте (по умолчанию `$STACK_ROOT/filebrowser/files`). На проде **не** ставьте `/`.
+- **Filebrowser** отдаёт только `FILEBROWSER_ROOT_PATH` на хосте (в `.env.example` — `/opt`). На проде **не** ставьте `/`.
 - **Статический сайт NGINX** публикует всё из `$STACK_ROOT/nginx/public`. Не кладите туда секреты, бэкапы, `.env` и private keys.
 - IP-фильтр, middleware Traefik, доступ только через VPN — **по умолчанию не настраиваются**.
 

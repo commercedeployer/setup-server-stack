@@ -8,24 +8,28 @@ Guide for first-time install: prerequisites, passwords, post-install checks, and
 
 ## 1. What this stack does
 
-One Linux VPS runs Docker containers for:
+One Linux VPS runs Docker containers. Each row is **why you would enable it** — not a product catalog.
 
 | Purpose | Service |
 |---------|---------|
-| HTTPS and subdomains | **Traefik** |
-| Docker image storage | **Registry** + **Registry auth** (`docker login`) |
-| Docker UI | **Portainer** |
+| HTTPS and `*.your-domain` routing | **Traefik** |
+| Private `docker push` / `pull` | **Registry** + **Registry auth** |
+| Manage containers in a browser | **Portainer** |
 | Scheduled image updates | **Watchtower** |
-| CI / tasks | **Semaphore** |
-| Docker disk usage | **Doku** |
-| Backups | **Duplicati** |
-| Uptime monitoring | **Uptime Kuma** |
-| Server metrics | **Beszel** (local agent auto-registered) |
-| File manager | **Filebrowser** |
-| Optional deploy app | **Deployer** (pre-built image via `DEPLOYER_IMAGE`) |
-| Optional DBs + web UIs | Mongo, Postgres, MariaDB, MySQL, mongo-express, pgAdmin, Adminer |
+| Ansible playbooks and SSH tasks | **Semaphore** |
+| Git repos, issues, CI in repos (Gitea Actions) | **Gitea** (+ **Actions runner**) |
+| Docker disk usage report | **Doku** |
+| Backups via web wizard (S3, SFTP, …) | **Duplicati** |
+| Cron shell jobs (rsync, restic, …) | **gocron** |
+| URL uptime monitoring and alerts | **Uptime Kuma** |
+| Server CPU / RAM / disk charts | **Beszel** (local agent auto-registered) |
+| Host files over HTTPS | **Filebrowser** |
+| Static site at `https://${DOMAIN}` | **NGINX** |
+| Deploy apps from JSON templates | **Deployer** (pre-built `DEPLOYER_IMAGE`) |
+| App databases (no public DB ports) | Mongo, Postgres, MariaDB, MySQL |
+| DB admin in a browser | mongo-express, pgAdmin, Adminer |
 
-All services use `https://service.your-domain`. Set **`DOMAIN`** once in `.env`.
+All HTTPS panels use `https://<name>.${DOMAIN}` unless noted (NGINX defaults to `https://${DOMAIN}`). Set **`DOMAIN`** once in `.env`.
 
 ---
 
@@ -203,7 +207,7 @@ sudo bash ./setup-server-stack.sh --force-secrets
 cat .secrets
 ```
 
-Includes `TRAEFIK_DASHBOARD_PASSWORD`, `REGISTRY_PASSWORD`, `REGISTRY_PULL_PASSWORD`, DB passwords, etc. **Do not commit** this file. After **`deploy-from-windows.ps1`**, a local copy is saved as **`secrets/<timestamp>`**.
+Includes `TRAEFIK_DASHBOARD_PASSWORD`, `REGISTRY_PASSWORD`, `GITEA_ADMIN_PASSWORD` (if Gitea is on), `BESZEL_USER_PASSWORD`, DB passwords, etc. **Do not commit** this file. After **`deploy-from-windows.ps1`**, a local copy is saved as **`secrets/<timestamp>`**.
 
 ---
 
@@ -245,15 +249,20 @@ Replace `example.com` with your **`DOMAIN`**:
 | Registry | `https://registry.example.com` | push: `STACK_ADMIN_USER` / `REGISTRY_PASSWORD`; pull-only: `REGISTRY_PULL_USER` / `REGISTRY_PULL_PASSWORD` |
 | Portainer | `https://portainer.example.com` | First visit — create admin in UI; secrets marker: `PORTAINER_ADMIN_PASSWORD=SET_ON_FIRST_LOGIN` |
 | Semaphore | `https://semaphore.example.com` | `STACK_ADMIN_USER` + `SEMAPHORE_ADMIN_PASSWORD` |
+| Gitea | `https://gitea.example.com` | `GITEA_ADMIN` + `GITEA_ADMIN_PASSWORD`; git+ssh on port `GITEA_SSH_PORT` (default 2222); Actions runner auto-registered when `ENABLE_GITEA_RUNNER=1` |
 | Doku | `https://doku.example.com` | `STACK_ADMIN_USER` + `DOKU_DASHBOARD_PASSWORD` |
 | Duplicati | `https://duplicati.example.com` | Password: `DUPLICATI_WEBSERVICE_PASSWORD` from secrets; backup jobs configured in UI (see §8) |
 | gocron | `https://gocron.example.com` | No built-in login — HTTPS edge only; jobs in UI or `config.yaml` (see §8) |
 | Uptime Kuma | `https://kuma.example.com` | Create admin on first visit; secrets marker: `UPTIME_KUMA_ADMIN_PASSWORD=SET_ON_FIRST_LOGIN` |
 | Beszel | `https://beszel.example.com` | Login `STACK_ADMIN_EMAIL` + `BESZEL_USER_PASSWORD` from secrets; this server is auto-registered as a monitored system (no manual "Add System") |
-| Filebrowser | `https://filebrowser.example.com` | `STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; rw host path from `FILEBROWSER_ROOT_PATH` (empty = `$STACK_ROOT/filebrowser/files`) |
+| Filebrowser | `https://filebrowser.example.com` | `STACK_ADMIN_USER` + `FILEBROWSER_PASSWORD`; rw host path from `FILEBROWSER_ROOT_PATH` (default `/opt`) |
+| NGINX static site | `https://example.com` (or `NGINX_HOST`) | Public files only — no login; content in `$STACK_ROOT/nginx/public` |
 | Deployer | `https://deployer.example.com` | `DEPLOYER_AUTH_MODE=dual` by default: UI uses `STACK_ADMIN_USER` / `DEPLOYER_ADMIN_PASSWORD`; API uses `DEPLOYER_API_KEY` |
+| mongo-express | `https://mongo-express.example.com` | `MONGO_EXPRESS_USER` + `MONGO_EXPRESS_PASSWORD` |
+| pgAdmin | `https://pgadmin.example.com` | `PGADMIN_EMAIL` + `PGADMIN_PASSWORD`; Postgres server pre-registered |
+| Adminer | `https://adminer.example.com` | Web UI only — DB credentials entered per session |
 
-**Filebrowser:** by default only `$STACK_ROOT/filebrowser/files` is exposed (not the whole server). Setting `FILEBROWSER_ROOT_PATH=/` mounts the entire host — avoid on production. See [SECURITY.md](SECURITY.md#web-panels-https-edge).
+**Filebrowser:** default rw path is `FILEBROWSER_ROOT_PATH` (`/opt` in `.env.example` — stack + Deployer data). `FILEBROWSER_ROOT_PATH=/` mounts the entire host — avoid on production. See [SECURITY.md](SECURITY.md#web-panels-https-edge).
 
 `registry-auth.example.com` is **Registry auth** (Docker token protocol, powered by `docker_auth`; not a human panel).
 
@@ -367,7 +376,7 @@ When the stack registry is enabled, Deployer uses `registry.${DOMAIN}` for **app
 
 Pull policy inside Deployer (for app images): `DEPLOYER_DEFAULT_PULL_POLICY=always` | `ifNotPresent` with retries (`DEPLOYER_PULL_MAX_ATTEMPTS`).
 
-**Provision tools** (inside the Deployer **container**, not on Ubuntu): `DEPLOYER_SOFTWARE` in `.env` — comma-separated keys, default `bash,curl`. `node` is always present. For Postgres tenant templates (`umami-pg`) add `psql`, e.g. `bash,curl,psql`. Full list in `.env.example` § Deployer.
+**Provision tools** (inside the Deployer **container**, not on Ubuntu): `DEPLOYER_SOFTWARE` in `.env` — comma-separated keys, default `bash,curl,psql`. `node` is always present. Full list in `.env.example` § Deployer.
 
 **MCP / Cursor:** issue keys in Deployer UI (**MCP / AI**). `DEPLOYER_PUBLIC_BASE_URL` defaults to `https://deployer.${DOMAIN}` in compose (override in `.env` if needed). Key hashes use `DEPLOYER_SECRET` — no separate MCP pepper or enable flag. Optional **`DEPLOYER_MCP_TOOLS_DENY`** — comma-separated MCP tool names to block on this host.
 
@@ -386,6 +395,17 @@ The stack starts the **Duplicati web UI** and stores its settings in `${STACK_RO
 After install, open `https://duplicati.${DOMAIN}`, log in with `DUPLICATI_WEBSERVICE_PASSWORD` from secrets, then create a backup job in the UI.
 
 By default Duplicati only sees its own `/config` inside the container. Since all stack data lives under `${STACK_ROOT}`, add a single **read-only** bind mount of `${STACK_ROOT}` to the `duplicati` service in `docker-compose.yml` (an example is commented there), then `docker compose ... up -d`. Paths must be readable by `DUP_PUID` / `DUP_PGID` (default `1000`).
+
+### Gitea (Git + Actions)
+
+Optional: **`ENABLE_GITEA=1`**. Self-hosted Git on your VPS: repos, issues, and **Gitea Actions** (CI from `.gitea/workflows/` in each repo — similar to GitHub Actions).
+
+- Web: `https://gitea.${DOMAIN}` (Traefik); **git+ssh** on **`GITEA_SSH_PORT`** (default **2222**; installer opens UFW).
+- **`ENABLE_GITEA_RUNNER=1`** (default when Gitea is on) — local runner for Docker builds; installer creates admin and registers the runner when possible. Manual token: **`GITEA_RUNNER_REGISTRATION_TOKEN`** (Site Administration → Actions → Runners).
+- Data: `${GITEA_DATA_PATH}` (SQLite) and `${GITEA_RUNNER_DATA_PATH}`.
+- Clone: `git clone ssh://git@gitea.${DOMAIN}:2222/owner/repo.git`
+
+**Semaphore** is for Ansible/SSH automation; **Gitea** is for Git-native CI in repos. Enable one or both.
 
 ### gocron (cron + backup utilities)
 
@@ -458,7 +478,7 @@ Already issued certificates stay in `${STACK_ROOT}/traefik/acme.json`; do not ru
 | `${DEPLOY_BASE_PATH}/` | Deployer container data (bind mount when Deployer enabled; default `/opt/deploy-data`) |
 | `${DEPLOY_BASE_PATH}/templates/` | Deployer template JSON (survives image updates; empty dir → seed from image on start) |
 | `${DEPLOY_BASE_PATH}/secrets.json` | Deployer **Vault** (Сейф): shared infra secrets for `{{KEY}}` in templates; fill via UI or file on host (chmod 600) |
-| `${STACK_ROOT}/<service>/` | Per-service persistent data (bind mounts): `registry`, `portainer`, `semaphore`, `duplicati`, `gocron`, `kuma`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql` |
+| `${STACK_ROOT}/<service>/` | Per-service persistent data (bind mounts): `registry`, `portainer`, `semaphore`, `gitea`, `gitea-runner`, `duplicati`, `gocron`, `kuma`, `beszel`, `beszel-agent`, `pgadmin`, `postgres`, `mongo`, `mariadb`, `mysql` |
 
 All persistent state lives under `${STACK_ROOT}` as bind mounts (no Docker named volumes), so a single copy of `${STACK_ROOT}` is a full backup of the stack. The installer creates each `${STACK_ROOT}/<service>` only for enabled services and sets ownership where needed (pgAdmin `5050:5050`, Semaphore `1001:0`). To relocate one service's data (e.g. a database onto a separate disk), set `<SERVICE>_DATA_PATH` in `.env` (see `.env.example` section `[M]`); a path outside `${STACK_ROOT}` still works and is left untouched by the Windows deploy (it only writes inside `${STACK_ROOT}`), but it is not included when you back up by copying `${STACK_ROOT}` — back such a path up separately.
 

@@ -58,7 +58,7 @@ load_fixture() {
 step "docker compose config"
 FIXTURE_DIR="$ROOT/tests/fixtures"
 
-for fixture in default lean db deployer; do
+for fixture in default lean db deployer gitea; do
   f="$FIXTURE_DIR/${fixture}.env.stack"
   [[ -f "$f" ]] || { echo "Missing fixture: $f" >&2; exit 1; }
   # Subshell keeps each fixture's exported vars from leaking into later steps.
